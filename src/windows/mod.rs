@@ -1,14 +1,17 @@
+mod waitable_objects;
+
 use std::{
     time::Duration,
-    sync::{ Once },
-    ffi::c_void
+    sync::{Once, RwLock},
+    ffi::c_void,
+    process::abort
 };
 use windows::Win32::{
     Foundation::{HANDLE, BOOLEAN},
     System::Threading::*,
 };
-use windows::Win32::Foundation::GetLastError;
-use crate::timer::{CallbackHint, Result, TimerError};
+use crate::timer::{CallbackHint, Result};
+use waitable_objects::ManualResetEvent;
 
 pub fn schedule_interval<F>(interval: Duration, handler: F) where F: FnMut() {
     INIT.call_once(|| unsafe {
@@ -24,22 +27,51 @@ pub struct TimerQueue {
     handle: HANDLE
 }
 
+/// Windows Timer
 pub struct Timer<'q, 'h> {
     queue: &'q TimerQueue,
     handle: HANDLE,
     callback: Box<MutWrapper<'h>>
 }
 
+struct CriticalSection<'e> {
+    event: &'e mut ManualResetEvent
+}
+
 struct MutWrapper<'h> {
-    f: Box<dyn FnMut() + 'h>
+    f: Box<dyn FnMut() + 'h>,
+    executing: ManualResetEvent,
+    mark_deleted: RwLock<bool>
+}
+
+impl<'e> CriticalSection<'e> {
+    fn new(r#ref: &'e mut ManualResetEvent) -> Self {
+        r#ref.reset().unwrap();
+        Self { event: r#ref }
+    }
+}
+
+impl<'e> Drop for CriticalSection<'e> {
+    fn drop(&mut self) {
+        self.event.set().unwrap();
+    }
 }
 
 impl<'h> MutWrapper<'h> {
     fn new<F>(handler: F) -> Self where F: FnMut() + Send + 'h {
-        MutWrapper::<'h> { f: Box::new(handler) }
+        MutWrapper::<'h> {
+            f: Box::new(handler),
+            executing: ManualResetEvent::new_init(true),
+            mark_deleted: RwLock::new(false)
+        }
     }
-    fn call(&mut self){
-        (self.f)();
+    fn call(&mut self) -> Result<()> {
+        let is_deleted = self.mark_deleted.read().unwrap();
+        if !*is_deleted {
+            let _ = CriticalSection::new(&mut self.executing);
+            (self.f)();
+        }
+        Ok(())
     }
 }
 
@@ -67,10 +99,9 @@ impl TimerQueue {
                                   due.as_millis() as u32, period, option).as_bool()
         };
         if create_timer_queue_timer_result {
-            Ok(Timer::<'q,'h> { queue: self, handle: HANDLE::default(), callback })
+            Ok(Timer::<'q,'h> { queue: self, handle: timer_handle, callback })
         } else {
-            let info = unsafe { GetLastError() };
-            Err(TimerError::OsError(info.0 as isize, info.to_hresult().message().to_string()))
+            Err(waitable_objects::get_last_error())
         }
     }
 
@@ -99,11 +130,26 @@ impl Drop for TimerQueue {
     }
 }
 
+const EXPECTED_EXECUTION_TIME: Duration = Duration::from_secs(2);
+
 impl<'q, 'h> Drop for Timer<'q, 'h> {
     fn drop(&mut self) {
         if !self.handle.is_invalid() {
-            assert!(unsafe { DeleteTimerQueueTimer(self.queue.handle, self.handle, None).as_bool() });
+            let mut is_deleted = self.callback.mark_deleted.write().unwrap();
+            *is_deleted = true;
+
+            if !self.callback.executing.wait_one(EXPECTED_EXECUTION_TIME).unwrap() {
+                println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
+                abort();
+            }
+
+            let finish = ManualResetEvent::new();
+            assert!(unsafe { DeleteTimerQueueTimer(self.queue.handle, self.handle, finish.handle).as_bool() });
             self.handle = HANDLE::default();
+
+            if !finish.wait_one(Duration::from_secs(5)).unwrap() {
+                println!("WARNING: Timed out! Something went wrong with DeleteTimerQueueTimer.");
+            }
         }
     }
 }
@@ -114,15 +160,19 @@ mod test {
         thread::sleep,
         time::Duration
     };
-    use super::TimerQueue;
+    use std::ffi::c_void;
+    use super::{ MutWrapper, TimerQueue };
 
     #[test]
     fn test_singleshot(){
         let mut my_queue = TimerQueue::new();
         let mut called = 0;
         {
-            my_queue.schedule_timer(Duration::from_millis(400), None, None, || called += 1).unwrap();
+            let timer = my_queue.schedule_timer(Duration::from_millis(400), None, None, || called += 1).unwrap();
             sleep(Duration::from_secs(1));
+
+            let callback_ref = timer.callback.as_ref() as *const MutWrapper as *const c_void;
+            println!("Check = {:?}", callback_ref);
         }
         assert_eq!(called, 1);
     }
