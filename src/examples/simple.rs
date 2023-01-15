@@ -25,7 +25,7 @@ fn main() {
     drop(t1);
     drop(t2);
     drop(t3);
-    //drop(t4);
+    // drop(t4);
 
     println!("That's it!");
 }

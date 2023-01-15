@@ -1,7 +1,7 @@
 use std::{
     marker::PhantomData, time::Duration, ffi::{c_void, CString}, ptr, mem};
-use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall, SYS_gettid,
-           timer_create, CLOCK_REALTIME, itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall, SYS_gettid, timer_create, CLOCK_REALTIME, itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_MONOTONIC};
 use crate::{ CallbackHint, Result, TimerError };
 
 pub struct TimerQueue;
@@ -38,6 +38,19 @@ impl TimerQueue {
     pub fn schedule_timer<'q,'h, F>(&self, due: Duration, period: Duration, _hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q,'h>>
         where F: FnMut() + Send + 'h
     {
+        let callback = Box::new(MutWrapper::new(handler));
+        let callback_ref = callback.as_ref() as *const MutWrapper as *mut c_void;
+
+        let (sender, retriever) = channel();
+        self.create_timer(due, period, sender, callback_ref)?;
+
+        let timer = retriever.recv().unwrap();
+
+        timer.map(|t| Timer::<'q,'h> { handle: Some(t), _callback: callback, _life: PhantomData })
+    }
+
+    fn create_timer(&self, due: Duration, period: Duration, sender: Sender<Result<timer_t>>, callback_ref: *mut c_void) -> Result<()>
+    {
         unsafe {
             let mut sa_mask = mem::zeroed();
             to_result(sigemptyset(&mut sa_mask))?;
@@ -49,8 +62,6 @@ impl TimerQueue {
             };
             to_result(sigaction(SIGRTMIN(), &sa, ptr::null_mut()))?;
 
-            let callback = Box::new(MutWrapper::new(handler));
-            let callback_ref = callback.as_ref() as *const MutWrapper as *mut c_void;
 
             let mut sev: sigevent = mem::zeroed();
             sev.sigev_value = sigval {
@@ -60,7 +71,7 @@ impl TimerQueue {
             sev.sigev_notify = SIGEV_THREAD_ID;
             sev.sigev_notify_thread_id = syscall(SYS_gettid) as i32;
             let mut timer = ptr::null_mut();
-            to_result(timer_create(CLOCK_REALTIME, &mut sev, &mut timer))?;
+            to_result(timer_create(CLOCK_MONOTONIC, &mut sev, &mut timer))?;
 
             let interval = itimerspec {
                 it_value: to_timespec(due),
@@ -68,10 +79,9 @@ impl TimerQueue {
             };
 
             to_result(timer_settime(timer, 0, &interval, ptr::null_mut()))?;
-
-            println!("Timer {timer:?} is created");
-            Ok(Timer::<'q,'h> { handle: Some(timer), _callback: callback, _life: PhantomData })
+            sender.send(Ok(timer)).unwrap();
         }
+        Ok(())
     }
 
     extern "C" fn timer_callback(_id: c_int, signal: *mut siginfo_t, _uc: *mut c_void){
