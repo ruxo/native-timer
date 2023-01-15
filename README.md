@@ -3,9 +3,16 @@
 Provide a timer functionality which uses OS capabilities. Currently supports
 Windows, Linux, and MacOS.
 
-v0.1.0 only support Windows platform.
+v0.2.0 Both Windows and Linux platforms are supported
 
+However, Linux timers currently use the caller thread to execute the timer handler. So if the handler takes long execution time, it will
+impact the schedule for shared timers. However, a timer with `CallbackHint::SlowFunction` will have its own dedicated thread per timer
+instance, but it's still subjected to the time spent by the handler. _Next version_ will try to dispatch call to the slow function by 
+separated threads.
 
+## Examples
+
+See `/src/examples/simple.rs` for usage.
 
 ## Credit
 

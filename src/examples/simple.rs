@@ -8,13 +8,13 @@ fn main() {
     let t3 = schedule_oneshot(Duration::from_millis(800), Some(CallbackHint::QuickFunction), || println!("One shot!")).unwrap();
 
     let mut lazy_count = 0;
-    // let t4 = schedule_interval(Duration::from_secs(1), Some(CallbackHint::SlowFunction), || {
-    //     lazy_count += 1;
-    //     let my_id = lazy_count;
-    //     println!("I'm lazy... #{my_id}");
-    //     sleep(Duration::from_secs(3));
-    //     println!("#{my_id} I may have been called with a dedicated thread");
-    // }).unwrap();
+    let t4 = schedule_interval(Duration::from_secs(1), Some(CallbackHint::SlowFunction), || {
+        lazy_count += 1;
+        let my_id = lazy_count;
+        println!("I'm lazy... #{my_id}");
+        sleep(Duration::from_secs(3));
+        println!("#{my_id} I may have been called with a dedicated thread");
+    }).unwrap();
 
     println!("Wait for timer working");
     sleep(Duration::from_secs(5));
@@ -25,7 +25,7 @@ fn main() {
     drop(t1);
     drop(t2);
     drop(t3);
-    // drop(t4);
+    drop(t4);
 
     println!("That's it!");
 }

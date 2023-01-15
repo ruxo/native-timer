@@ -1,13 +1,16 @@
 use std::{
-    marker::PhantomData, time::Duration, ffi::{c_void, CString}, ptr, mem};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall, SYS_gettid, timer_create, CLOCK_REALTIME, itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_MONOTONIC};
+    marker::PhantomData, time::Duration, ffi::{c_void, CString}, ptr, mem, thread
+};
+use std::sync::{Arc, Condvar, Mutex, mpsc::{channel, Sender}};
+use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall, SYS_gettid, timer_create,
+           itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_MONOTONIC};
 use crate::{ CallbackHint, Result, TimerError };
 
 pub struct TimerQueue;
 
 pub struct Timer<'q,'h> {
     handle: Option<timer_t>,
+    wait: Option<Arc<(Mutex<bool>, Condvar)>>,
     _callback: Box<MutWrapper<'h>>,
     _life: PhantomData<&'q ()>
 }
@@ -35,21 +38,39 @@ impl TimerQueue {
     /// Default OS common timer queue
     pub const fn default() -> Self { Self }
 
-    pub fn schedule_timer<'q,'h, F>(&self, due: Duration, period: Duration, _hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q,'h>>
+    pub fn schedule_timer<'q,'h, F>(&self, due: Duration, period: Duration, hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q,'h>>
         where F: FnMut() + Send + 'h
     {
         let callback = Box::new(MutWrapper::new(handler));
-        let callback_ref = callback.as_ref() as *const MutWrapper as *mut c_void;
+        let callback_ref = callback.as_ref() as *const MutWrapper as usize;
 
         let (sender, retriever) = channel();
-        self.create_timer(due, period, sender, callback_ref)?;
+
+        let wait = if let Some(CallbackHint::SlowFunction) = hints {
+            let wait = Arc::new((Mutex::new(false), Condvar::new()));
+            let thread_wait = Arc::clone(&wait);
+            thread::spawn(move || {
+                if let Err(e) = Self::create_timer(due, period, sender, callback_ref) {
+                    println!("WARNING: Create timer error {e:?}");
+                }
+                let (lock, cvar) = &*thread_wait;
+                let mut quited = lock.lock().unwrap();
+                while !*quited {
+                    quited = cvar.wait(quited).unwrap();
+                }
+            });
+            Some(wait)
+        } else {
+            Self::create_timer(due, period, sender, callback_ref)?;
+            None
+        };
 
         let timer = retriever.recv().unwrap();
 
-        timer.map(|t| Timer::<'q,'h> { handle: Some(t), _callback: callback, _life: PhantomData })
+        timer.map(|t| Timer::<'q,'h> { handle: Some(t as timer_t), wait, _callback: callback, _life: PhantomData })
     }
 
-    fn create_timer(&self, due: Duration, period: Duration, sender: Sender<Result<timer_t>>, callback_ref: *mut c_void) -> Result<()>
+    fn create_timer(due: Duration, period: Duration, sender: Sender<Result<usize>>, callback_ref: usize) -> Result<()>
     {
         unsafe {
             let mut sa_mask = mem::zeroed();
@@ -62,10 +83,9 @@ impl TimerQueue {
             };
             to_result(sigaction(SIGRTMIN(), &sa, ptr::null_mut()))?;
 
-
             let mut sev: sigevent = mem::zeroed();
             sev.sigev_value = sigval {
-                sival_ptr: callback_ref
+                sival_ptr: callback_ref as *mut c_void
             };
             sev.sigev_signo = SIGRTMIN();
             sev.sigev_notify = SIGEV_THREAD_ID;
@@ -79,7 +99,7 @@ impl TimerQueue {
             };
 
             to_result(timer_settime(timer, 0, &interval, ptr::null_mut()))?;
-            sender.send(Ok(timer)).unwrap();
+            sender.send(Ok(timer as usize)).unwrap();
         }
         Ok(())
     }
@@ -111,7 +131,12 @@ fn to_timespec(value: Duration) -> timespec {
 impl<'q,'h> Drop for Timer<'q,'h> {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            println!("Cleaning up {handle:?}");
+            if let Some(wait) = self.wait.take() {
+                let (lock, cvar) = &*wait;
+                let mut quited = lock.lock().unwrap();
+                *quited = true;
+                cvar.notify_one();
+            }
             unsafe {
                 if timer_delete(handle) < 0 {
                     let e = get_errno();
