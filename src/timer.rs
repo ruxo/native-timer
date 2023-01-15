@@ -3,11 +3,9 @@ use std::fmt::{Display, Formatter};
 /// Scheduler hint about the callback function.
 pub enum CallbackHint {
     /// The callback function execution is quick. The scheduler may use a common timer thread for executing the function.
-    ///
-    /// This is the default option, if hint is not specified.
     QuickFunction,
 
-    /// The callbafck function execution takes time. The schedule may create a dedicated thread for the function.
+    /// The callback function execution takes time. The schedule may create a dedicated thread for the function.
     SlowFunction
 }
 

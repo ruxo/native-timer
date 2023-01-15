@@ -2,27 +2,18 @@ mod waitable_objects;
 
 use std::{
     time::Duration,
-    sync::{Once, RwLock},
+    sync::RwLock,
     ffi::c_void,
     process::abort
 };
 use windows::Win32::{
-    Foundation::{HANDLE, BOOLEAN},
+    Foundation::{HANDLE, BOOLEAN, ERROR_IO_PENDING},
     System::Threading::*,
 };
-use crate::timer::{CallbackHint, Result};
-use waitable_objects::ManualResetEvent;
+use super::timer::{CallbackHint, Result};
+use waitable_objects::{ManualResetEvent, get_last_error, get_win32_last_error, to_result};
 
-pub fn schedule_interval<F>(interval: Duration, handler: F) where F: FnMut() {
-    INIT.call_once(|| unsafe {
-        TIMER_QUEUE = TimerQueue::new();
-    });
-
-}
-
-static mut TIMER_QUEUE: TimerQueue = TimerQueue::default();
-static INIT: Once = Once::new();
-
+// ------------------ DATA STRUCTURE -------------------------------
 pub struct TimerQueue {
     handle: HANDLE
 }
@@ -34,6 +25,8 @@ pub struct Timer<'q, 'h> {
     callback: Box<MutWrapper<'h>>
 }
 
+pub struct TimerHandle<'h>(Timer<'static, 'h>);
+
 struct CriticalSection<'e> {
     event: &'e mut ManualResetEvent
 }
@@ -43,6 +36,18 @@ struct MutWrapper<'h> {
     executing: ManualResetEvent,
     mark_deleted: RwLock<bool>
 }
+
+// ------------------ FUNCTIONS -------------------------------
+pub fn schedule_interval<'h, F>(interval: Duration, hint: Option<CallbackHint>, handler: F) -> Result<TimerHandle<'h>> where F: FnMut() + Send + 'h {
+    DEFAULT_QUEUE.schedule_timer(interval, Some(interval), hint, handler).map(|t| TimerHandle(t))
+}
+
+pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<TimerHandle<'h>> where F: FnMut() + Send + 'h {
+    DEFAULT_QUEUE.schedule_timer(due, None, hint, handler).map(|t| TimerHandle(t))
+}
+
+// ------------------ IMPLEMENTATIONS -------------------------------
+const DEFAULT_QUEUE: &TimerQueue = &TimerQueue::default();
 
 impl<'e> CriticalSection<'e> {
     fn new(r#ref: &'e mut ManualResetEvent) -> Self {
@@ -68,8 +73,9 @@ impl<'h> MutWrapper<'h> {
     fn call(&mut self) -> Result<()> {
         let is_deleted = self.mark_deleted.read().unwrap();
         if !*is_deleted {
-            let _ = CriticalSection::new(&mut self.executing);
+            let cs = CriticalSection::new(&mut self.executing);
             (self.f)();
+            drop(cs);
         }
         Ok(())
     }
@@ -81,7 +87,7 @@ impl TimerQueue {
     }
 
     /// Schedule a timer, either a one-shot timer, or a periodical timer.
-    pub fn schedule_timer<'q, 'h, F>(&'q mut self, due: Duration, period: Option<Duration>, hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q, 'h>>
+    pub fn schedule_timer<'q, 'h, F>(&'q self, due: Duration, period: Option<Duration>, hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q, 'h>>
         where F: FnMut() + Send + 'h
     {
         let period = period.map(|d| d.as_millis() as u32).unwrap_or(0);
@@ -101,11 +107,12 @@ impl TimerQueue {
         if create_timer_queue_timer_result {
             Ok(Timer::<'q,'h> { queue: self, handle: timer_handle, callback })
         } else {
-            Err(waitable_objects::get_last_error())
+            Err(get_last_error())
         }
     }
 
-    const fn default() -> Self {
+    /// Default OS common timer queue
+    pub const fn default() -> Self {
         Self { handle: HANDLE(0) }
     }
 }
@@ -130,6 +137,12 @@ impl Drop for TimerQueue {
     }
 }
 
+impl<'q,'h> Timer<'q,'h> {
+    pub fn change_period(&self, due: Duration, period: Duration) -> Result<()> {
+        to_result(unsafe { ChangeTimerQueueTimer(self.queue.handle, self.handle, due.as_millis() as u32, period.as_millis() as u32).as_bool() })
+    }
+}
+
 const EXPECTED_EXECUTION_TIME: Duration = Duration::from_secs(2);
 
 impl<'q, 'h> Drop for Timer<'q, 'h> {
@@ -138,22 +151,28 @@ impl<'q, 'h> Drop for Timer<'q, 'h> {
             let mut is_deleted = self.callback.mark_deleted.write().unwrap();
             *is_deleted = true;
 
+            // ensure no callback during destruction
+            self.change_period(Duration::default(), Duration::default()).unwrap();
+
             if !self.callback.executing.wait_one(EXPECTED_EXECUTION_TIME).unwrap() {
                 println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
                 abort();
             }
 
-            let finish = ManualResetEvent::new();
-            assert!(unsafe { DeleteTimerQueueTimer(self.queue.handle, self.handle, finish.handle).as_bool() });
-            self.handle = HANDLE::default();
+            let result = unsafe { DeleteTimerQueueTimer(self.queue.handle, self.handle, None).as_bool() };
 
-            if !finish.wait_one(Duration::from_secs(5)).unwrap() {
-                println!("WARNING: Timed out! Something went wrong with DeleteTimerQueueTimer.");
+            if !result {
+                let e = get_win32_last_error();
+                if e != ERROR_IO_PENDING {
+                    println!("WARNING: Delete timer failed with error {e:?}. No retry attempt. Memory might leak!");
+                }
             }
+            self.handle = HANDLE::default();
         }
     }
 }
 
+// ------------------ TESTS -------------------------------
 #[cfg(test)]
 mod test {
     use std::{
@@ -165,7 +184,7 @@ mod test {
 
     #[test]
     fn test_singleshot(){
-        let mut my_queue = TimerQueue::new();
+        let my_queue = TimerQueue::new();
         let mut called = 0;
         {
             let timer = my_queue.schedule_timer(Duration::from_millis(400), None, None, || called += 1).unwrap();
@@ -179,7 +198,7 @@ mod test {
 
     #[test]
     fn test_period(){
-        let mut my_queue = TimerQueue::new();
+        let my_queue = TimerQueue::new();
         let mut called = 0;
         let duration = Duration::from_millis(300);
         {
