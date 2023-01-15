@@ -1,12 +1,17 @@
 [package]
 name = "native-timer"
-authors = ["Ruxo Zheng <rz@just.sent.as>"]
+authors = ["Ruxo Zheng <me@ruxoz.net>"]
 version = "0.1.0"
 edition = "2021"
 
-license = "MIT"
 description = "Timer library which uses OS timer capabilities."
-keywords = ["native", "timer"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://doc.rs/native-timer"
+documentation = "https://doc.rs/native-timer"
+repository = "https://github.com/ruxo/native-timer"
+keywords = ["native", "timer", "schedule"]
+categories = ["concurrency", "os::windows-apis"]
 
 [dependencies]
 

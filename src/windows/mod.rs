@@ -14,6 +14,22 @@ use super::timer::{CallbackHint, Result};
 use waitable_objects::{ManualResetEvent, get_last_error, get_win32_last_error, to_result};
 
 // ------------------ DATA STRUCTURE -------------------------------
+/// Wrapper of Windows Timer Queue API
+///
+/// Windows OS provides a default Timer Queue which can be retrieved by using [`TimerQueue::default`]. The default queue has `'static` lifetime, and can
+/// be assigned as a constant.
+///
+/// ```rust
+/// # use std::thread::sleep;
+/// # use std::time::Duration;
+/// # use native_timer::TimerQueue;
+/// let mut count = 0;
+/// let default_queue = TimerQueue::default();
+/// let t = default_queue.schedule_timer(Duration::from_millis(100), Duration::default(), None, || count += 1);
+/// sleep(Duration::from_millis(200));
+/// drop(t);
+/// assert_eq!(count, 1);
+/// ```
 pub struct TimerQueue {
     handle: HANDLE
 }
@@ -38,12 +54,34 @@ struct MutWrapper<'h> {
 }
 
 // ------------------ FUNCTIONS -------------------------------
+
+/// Schedule an interval task.
+///
+/// The function `interval` cannot be negative (it will be converted to `u32`). [`CallbackHint`] gives the OS scheduler some hint about the callback
+/// behavior. For example, if the handler takes long time to finish, the caller should hint with [`CallbackHint::SlowFunction`]. If no hint is specified,
+/// it's up to the scheduler to decide.
+///
+/// Following example doesn't give a hint.
+///
+/// ```rust
+/// # use std::thread::sleep;
+/// # use std::time::Duration;
+/// # use native_timer::schedule_interval;
+/// let mut count = 0;
+/// let t = schedule_interval(Duration::from_millis(200), None, || count += 1);
+/// sleep(Duration::from_millis(500));
+/// drop(t);
+/// assert_eq!(count, 2);
+/// ```
 pub fn schedule_interval<'h, F>(interval: Duration, hint: Option<CallbackHint>, handler: F) -> Result<TimerHandle<'h>> where F: FnMut() + Send + 'h {
-    DEFAULT_QUEUE.schedule_timer(interval, Some(interval), hint, handler).map(|t| TimerHandle(t))
+    DEFAULT_QUEUE.schedule_timer(interval, interval, hint, handler).map(|t| TimerHandle(t))
 }
 
+/// Schedule an one-shot task.
+///
+/// The details of parameters are similar to [`schedule_interval`] function.
 pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<TimerHandle<'h>> where F: FnMut() + Send + 'h {
-    DEFAULT_QUEUE.schedule_timer(due, None, hint, handler).map(|t| TimerHandle(t))
+    DEFAULT_QUEUE.schedule_timer(due, Duration::ZERO, hint, handler).map(|t| TimerHandle(t))
 }
 
 // ------------------ IMPLEMENTATIONS -------------------------------
@@ -87,10 +125,10 @@ impl TimerQueue {
     }
 
     /// Schedule a timer, either a one-shot timer, or a periodical timer.
-    pub fn schedule_timer<'q, 'h, F>(&'q self, due: Duration, period: Option<Duration>, hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q, 'h>>
+    pub fn schedule_timer<'q, 'h, F>(&'q self, due: Duration, period: Duration, hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q, 'h>>
         where F: FnMut() + Send + 'h
     {
-        let period = period.map(|d| d.as_millis() as u32).unwrap_or(0);
+        let period = period.as_millis() as u32;
         let option = hints.map(|o| match o {
             CallbackHint::QuickFunction => WT_EXECUTEINPERSISTENTTHREAD,
             CallbackHint::SlowFunction => WT_EXECUTELONGFUNCTION,
@@ -119,7 +157,9 @@ impl TimerQueue {
 
 extern "system" fn timer_callback(ctx: *mut c_void, _: BOOLEAN) {
     let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
-    wrapper.call();
+    if let Err(e) = wrapper.call() {
+        println!("WARNING: Error occurred during timer callback: {e:?}");
+    }
 }
 
 impl Default for TimerQueue {
@@ -179,20 +219,15 @@ mod test {
         thread::sleep,
         time::Duration
     };
-    use std::ffi::c_void;
-    use super::{ MutWrapper, TimerQueue };
+    use super::TimerQueue;
 
     #[test]
     fn test_singleshot(){
         let my_queue = TimerQueue::new();
         let mut called = 0;
-        {
-            let timer = my_queue.schedule_timer(Duration::from_millis(400), None, None, || called += 1).unwrap();
-            sleep(Duration::from_secs(1));
-
-            let callback_ref = timer.callback.as_ref() as *const MutWrapper as *const c_void;
-            println!("Check = {:?}", callback_ref);
-        }
+        let timer = my_queue.schedule_timer(Duration::from_millis(400), Duration::ZERO, None, || called += 1).unwrap();
+        sleep(Duration::from_secs(1));
+        drop(timer);
         assert_eq!(called, 1);
     }
 
@@ -201,10 +236,9 @@ mod test {
         let my_queue = TimerQueue::new();
         let mut called = 0;
         let duration = Duration::from_millis(300);
-        {
-            let timer = my_queue.schedule_timer(duration, Some(duration), None, || called += 1).unwrap();
-            sleep(Duration::from_secs(1));
-        }
+        let t = my_queue.schedule_timer(duration, duration, None, || called += 1).unwrap();
+        sleep(Duration::from_secs(1));
+        drop(t);
         assert_eq!(called, 3);
     }
 }

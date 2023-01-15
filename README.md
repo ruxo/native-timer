@@ -3,6 +3,10 @@
 Provide a timer functionality which uses OS capabilities. Currently supports
 Windows, Linux, and MacOS.
 
+v0.1.0 only support Windows platform.
+
+
+
 ## Credit
 
 Linux and MacOS implementations are recovered from [Autd3 open source library](https://github.com/sssssssuzuki/rust-autd)

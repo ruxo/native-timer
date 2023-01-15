@@ -35,14 +35,15 @@ impl From<WIN32_ERROR> for TimerError {
 }
 
 impl ManualResetEvent {
-    #[inline]
+    #[inline] #[allow(dead_code)]
     pub fn new() -> Self { ManualResetEvent::new_init(false) }
     pub fn new_init(initial_state: bool) -> Self {
         let handle = unsafe { CreateEventA(None, true, initial_state, None).unwrap() };
         Self { handle }
     }
 
-    #[inline] pub fn wait_until_set(&self) -> Result<bool> {
+    #[inline] #[allow(dead_code)]
+    pub fn wait_until_set(&self) -> Result<bool> {
         self.wait(INFINITE)
     }
 
