@@ -10,7 +10,7 @@ use windows::Win32::{
     Foundation::{HANDLE, BOOLEAN, ERROR_IO_PENDING},
     System::Threading::*,
 };
-use super::timer::{CallbackHint, Result};
+use super::timer::{CallbackHint, Result, DEFAULT_ACCEPTABLE_EXECUTION_TIME};
 use waitable_objects::{ManualResetEvent, get_last_error, get_win32_last_error, to_result};
 
 // ------------------ DATA STRUCTURE -------------------------------
@@ -31,37 +31,38 @@ use waitable_objects::{ManualResetEvent, get_last_error, get_win32_last_error, t
 /// assert_eq!(count, 1);
 /// ```
 pub struct TimerQueue {
-    handle: HANDLE,
+    handle: HANDLE
 }
 
 /// Windows Timer
 pub struct Timer<'q, 'h> {
     queue: &'q TimerQueue,
     handle: HANDLE,
-    callback: Box<MutWrapper<'h>>
+    callback: Box<MutWrapper<'h>>,
+    acceptable_execution_time: Duration
 }
 
 struct CriticalSection<'e> {
-    event: &'e mut ManualResetEvent
+    idling: &'e mut ManualResetEvent
 }
 
 struct MutWrapper<'h> {
     f: Box<dyn FnMut() + 'h>,
-    executing: ManualResetEvent,
+    idling: ManualResetEvent,
     mark_deleted: RwLock<bool>
 }
 
 // ------------------ IMPLEMENTATIONS -------------------------------
 impl<'e> CriticalSection<'e> {
-    fn new(r#ref: &'e mut ManualResetEvent) -> Self {
-        r#ref.reset().unwrap();
-        Self { event: r#ref }
+    fn new(idling: &'e mut ManualResetEvent) -> Self {
+        idling.reset().unwrap();
+        Self { idling }
     }
 }
 
 impl<'e> Drop for CriticalSection<'e> {
     fn drop(&mut self) {
-        self.event.set().unwrap();
+        self.idling.set().unwrap();
     }
 }
 
@@ -69,14 +70,14 @@ impl<'h> MutWrapper<'h> {
     fn new<F>(handler: F) -> Self where F: FnMut() + Send + 'h {
         MutWrapper::<'h> {
             f: Box::new(handler),
-            executing: ManualResetEvent::new_init(true),
+            idling: ManualResetEvent::new_init(true),
             mark_deleted: RwLock::new(false)
         }
     }
     fn call(&mut self) -> Result<()> {
         let is_deleted = self.mark_deleted.read().unwrap();
         if !*is_deleted {
-            let cs = CriticalSection::new(&mut self.executing);
+            let cs = CriticalSection::new(&mut self.idling);
             (self.f)();
             drop(cs);
         }
@@ -96,11 +97,12 @@ impl TimerQueue {
         where F: FnMut() + Send + 'h
     {
         let period = period.as_millis() as u32;
-        let option = hints.map(|o| match o {
-            CallbackHint::QuickFunction => WT_EXECUTEINPERSISTENTTHREAD,
-            CallbackHint::SlowFunction => WT_EXECUTELONGFUNCTION,
-        }).unwrap_or(WT_EXECUTEDEFAULT);
+        let (option, acceptable_execution_time) = hints.map(|o| match o {
+            CallbackHint::QuickFunction => (WT_EXECUTEINPERSISTENTTHREAD, DEFAULT_ACCEPTABLE_EXECUTION_TIME),
+            CallbackHint::SlowFunction(t) => (WT_EXECUTELONGFUNCTION, t)
+        }).unwrap_or((WT_EXECUTEDEFAULT, DEFAULT_ACCEPTABLE_EXECUTION_TIME));
         let option = if period == 0 { option | WT_EXECUTEONLYONCE } else { option };
+
         let mut timer_handle = HANDLE::default();
         let callback = Box::new(MutWrapper::new(handler));
         let callback_ref = callback.as_ref() as *const MutWrapper as *const c_void;
@@ -110,7 +112,7 @@ impl TimerQueue {
                                   due.as_millis() as u32, period, option).as_bool()
         };
         if create_timer_queue_timer_result {
-            Ok(Timer::<'q,'h> { queue: self, handle: timer_handle, callback })
+            Ok(Timer::<'q,'h> { queue: self, handle: timer_handle, callback, acceptable_execution_time })
         } else {
             Err(get_last_error())
         }
@@ -145,8 +147,6 @@ impl<'q,'h> Timer<'q,'h> {
     }
 }
 
-const EXPECTED_EXECUTION_TIME: Duration = Duration::from_secs(2);
-
 impl<'q, 'h> Drop for Timer<'q, 'h> {
     fn drop(&mut self) {
         if !self.handle.is_invalid() {
@@ -156,7 +156,7 @@ impl<'q, 'h> Drop for Timer<'q, 'h> {
             // ensure no callback during destruction
             self.change_period(Duration::default(), Duration::default()).unwrap();
 
-            if !self.callback.executing.wait_one(EXPECTED_EXECUTION_TIME).unwrap() {
+            if !self.callback.idling.wait_one(self.acceptable_execution_time).unwrap() {
                 println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
                 abort();
             }

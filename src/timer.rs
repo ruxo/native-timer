@@ -9,8 +9,9 @@ pub enum CallbackHint {
     /// The callback function execution is quick. The scheduler may use a common timer thread for executing the function.
     QuickFunction,
 
-    /// The callback function execution takes time. The schedule may create a dedicated thread for the function.
-    SlowFunction
+    /// The callback function execution takes time. The schedule may create a dedicated thread for the function. The longest execution time
+    /// expected should be supplied in the first parameter.
+    SlowFunction(Duration)
 }
 
 #[derive(Debug)]
@@ -21,6 +22,11 @@ pub enum TimerError {
 pub type Result<T> = std::result::Result<T, TimerError>;
 
 pub struct TimerHandle<'h>(Timer<'static, 'h>);
+
+pub const DEFAULT_ACCEPTABLE_EXECUTION_TIME: Duration = Duration::from_secs(1);
+
+//----------------------------- FUNCTIONS --------------------------------------
+
 
 /// Schedule an interval task.
 ///

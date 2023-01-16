@@ -2,6 +2,8 @@
 
 - Minor document fixes
 - Break `TimerQueue::default()` signature compatibility. Now it returns a reference.
+- Break `CallerHint::SlowFunction` signature to accept an "acceptable execution time", time that the handler is 
+  expected to complete during the timer's destruction.
 
 ### 0.2.0
 

@@ -8,7 +8,7 @@ fn main() {
     let t3 = schedule_oneshot(Duration::from_millis(800), Some(CallbackHint::QuickFunction), || println!("One shot!")).unwrap();
 
     let mut lazy_count = 0;
-    let t4 = schedule_interval(Duration::from_secs(1), Some(CallbackHint::SlowFunction), || {
+    let t4 = schedule_interval(Duration::from_secs(1), Some(CallbackHint::SlowFunction(Duration::from_secs(5))), || {
         lazy_count += 1;
         let my_id = lazy_count;
         println!("I'm lazy... #{my_id}");
