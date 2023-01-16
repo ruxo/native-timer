@@ -31,7 +31,7 @@ use waitable_objects::{ManualResetEvent, get_last_error, get_win32_last_error, t
 /// assert_eq!(count, 1);
 /// ```
 pub struct TimerQueue {
-    handle: HANDLE
+    handle: HANDLE,
 }
 
 /// Windows Timer
@@ -84,6 +84,8 @@ impl<'h> MutWrapper<'h> {
     }
 }
 
+static DEFAULT_QUEUE: TimerQueue = TimerQueue { handle: HANDLE(0) };
+
 impl TimerQueue {
     pub fn new() -> Self {
         unsafe { Self { handle: CreateTimerQueue().unwrap() } }
@@ -115,8 +117,9 @@ impl TimerQueue {
     }
 
     /// Default OS common timer queue
-    pub const fn default() -> Self {
-        Self { handle: HANDLE(0) }
+    #[inline]
+    pub fn default() -> &'static TimerQueue {
+        &DEFAULT_QUEUE
     }
 }
 
@@ -124,12 +127,6 @@ extern "system" fn timer_callback(ctx: *mut c_void, _: BOOLEAN) {
     let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
     if let Err(e) = wrapper.call() {
         println!("WARNING: Error occurred during timer callback: {e:?}");
-    }
-}
-
-impl Default for TimerQueue {
-    fn default() -> Self {
-        TimerQueue::default()
     }
 }
 

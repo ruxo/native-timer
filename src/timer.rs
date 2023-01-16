@@ -41,17 +41,15 @@ pub struct TimerHandle<'h>(Timer<'static, 'h>);
 /// assert_eq!(count, 2);
 /// ```
 pub fn schedule_interval<'h, F>(interval: Duration, hint: Option<CallbackHint>, handler: F) -> Result<TimerHandle<'h>> where F: FnMut() + Send + 'h {
-    DEFAULT_QUEUE.schedule_timer(interval, interval, hint, handler).map(|t| TimerHandle(t))
+    TimerQueue::default().schedule_timer(interval, interval, hint, handler).map(|t| TimerHandle(t))
 }
 
 /// Schedule an one-shot task.
 ///
 /// The details of parameters are similar to [`schedule_interval`] function.
 pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<TimerHandle<'h>> where F: FnMut() + Send + 'h {
-    DEFAULT_QUEUE.schedule_timer(due, Duration::ZERO, hint, handler).map(|t| TimerHandle(t))
+    TimerQueue::default().schedule_timer(due, Duration::ZERO, hint, handler).map(|t| TimerHandle(t))
 }
-
-const DEFAULT_QUEUE: &TimerQueue = &TimerQueue::default();
 
 impl Display for TimerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
