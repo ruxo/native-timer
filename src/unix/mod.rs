@@ -46,7 +46,7 @@ impl TimerQueue {
 
         let (sender, retriever) = channel();
 
-        let wait = if let Some(CallbackHint::SlowFunction) = hints {
+        let wait = if let Some(CallbackHint::SlowFunction(_)) = hints {
             let wait = Arc::new((Mutex::new(false), Condvar::new()));
             let thread_wait = Arc::clone(&wait);
             thread::spawn(move || {

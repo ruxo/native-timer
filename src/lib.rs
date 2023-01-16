@@ -2,13 +2,15 @@
 mod windows;
 
 #[cfg(windows)]
-pub use crate::windows::{ TimerQueue, Timer };
+use crate::windows as platform;
 
 #[cfg(unix)]
 mod unix;
 
 #[cfg(unix)]
-pub use crate::unix::{ TimerQueue, Timer };
+use crate::unix as platform;
 
 mod timer;
+
+pub use platform::{ TimerQueue, Timer };
 pub use timer::*;
