@@ -1,3 +1,5 @@
+mod waitable_objects;
+
 use std::{
     marker::PhantomData, time::Duration, ffi::{c_void, CString}, ptr, mem, thread
 };
@@ -5,12 +7,13 @@ use std::sync::{Arc, Condvar, Mutex, mpsc::{channel, Sender}};
 use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall, SYS_gettid, timer_create,
            itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_MONOTONIC};
 use crate::{ CallbackHint, Result, TimerError };
+use waitable_objects::ManualResetEvent;
 
 pub struct TimerQueue;
 
 pub struct Timer<'q,'h> {
     handle: Option<timer_t>,
-    wait: Option<Arc<(Mutex<bool>, Condvar)>>,
+    quit: Option<ManualResetEvent>,
     _callback: Box<MutWrapper<'h>>,
     _life: PhantomData<&'q ()>
 }
@@ -46,20 +49,18 @@ impl TimerQueue {
 
         let (sender, retriever) = channel();
 
-        let wait = if let Some(CallbackHint::SlowFunction(_)) = hints {
-            let wait = Arc::new((Mutex::new(false), Condvar::new()));
-            let thread_wait = Arc::clone(&wait);
+        let quit = if let Some(CallbackHint::SlowFunction(_)) = hints {
+            let quit = ManualResetEvent::new();
+            let thread_quit = quit.clone();
             thread::spawn(move || {
                 if let Err(e) = Self::create_timer(due, period, sender, callback_ref) {
-                    println!("WARNING: Create timer error {e:?}");
+                    println!("WARNING: Create timer error: {e:?}");
                 }
-                let (lock, cvar) = &*thread_wait;
-                let mut quited = lock.lock().unwrap();
-                while !*quited {
-                    quited = cvar.wait(quited).unwrap();
+                else if let Err(e) = thread_quit.wait_until_set() {
+                    println!("WARNING: an error occurred during wait, timer might not schedule properly: {e:?}");
                 }
             });
-            Some(wait)
+            Some(quit)
         } else {
             Self::create_timer(due, period, sender, callback_ref)?;
             None
@@ -67,7 +68,7 @@ impl TimerQueue {
 
         let timer = retriever.recv().unwrap();
 
-        timer.map(|t| Timer::<'q,'h> { handle: Some(t as timer_t), wait, _callback: callback, _life: PhantomData })
+        timer.map(|t| Timer::<'q,'h> { handle: Some(t as timer_t), quit, _callback: callback, _life: PhantomData })
     }
 
     fn create_timer(due: Duration, period: Duration, sender: Sender<Result<usize>>, callback_ref: usize) -> Result<()>
@@ -131,11 +132,10 @@ fn to_timespec(value: Duration) -> timespec {
 impl<'q,'h> Drop for Timer<'q,'h> {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            if let Some(wait) = self.wait.take() {
-                let (lock, cvar) = &*wait;
-                let mut quited = lock.lock().unwrap();
-                *quited = true;
-                cvar.notify_one();
+            if let Some(mut quit) = self.quit.take() {
+                if let Err(e) = quit.set() {
+                    println!("WARNING: Signaling a timer to quit failed, there might be a zombie thread: {e:?}");
+                }
             }
             unsafe {
                 if timer_delete(handle) < 0 {

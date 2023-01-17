@@ -1,6 +1,5 @@
 use std::{
-    fmt::{Display, Formatter},
-    time::Duration
+    fmt::{Display, Formatter}, fmt, time::Duration
 };
 use crate::{ TimerQueue, Timer };
 
@@ -16,7 +15,10 @@ pub enum CallbackHint {
 
 #[derive(Debug)]
 pub enum TimerError {
-    OsError(isize, String)
+    OsError(isize, String),
+
+    /// Meaning a sync object gets broken (or poisoned) due to panic!()
+    SynchronizationBroken
 }
 
 pub type Result<T> = std::result::Result<T, TimerError>;
@@ -58,10 +60,17 @@ pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handle
 }
 
 impl Display for TimerError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            TimerError::OsError(code, msg) => write!(f, "OS error {code}: {msg}")
+            TimerError::OsError(code, msg) => write!(f, "OS error {code}: {msg}"),
+            TimerError::SynchronizationBroken => write!(f, "A sync object is broken from a thread's panic!")
         }
+    }
+}
+
+impl<T> From<std::sync::PoisonError<T>> for TimerError {
+    fn from(_value: std::sync::PoisonError<T>) -> Self {
+        Self::SynchronizationBroken
     }
 }
 

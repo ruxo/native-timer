@@ -57,7 +57,7 @@ impl ManualResetEvent {
             WAIT_OBJECT_0 => Ok(true),
             WAIT_TIMEOUT => Ok(false),
             WAIT_FAILED => Err(get_last_error()),
-            _ => panic!("impossible wait state: {ret:?}")
+            _ => unreachable!()
         }
     }
 
