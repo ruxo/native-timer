@@ -3,7 +3,7 @@ use std::{
     time::Duration,
     sync::mpsc::{channel, Sender, Receiver},
     ffi::{c_void, CString},
-    ptr, mem, thread, sync
+    process, ptr, mem, thread, sync
 };
 use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall,
            SYS_gettid, timer_create,
@@ -24,7 +24,7 @@ pub struct TimerQueue {
 
 pub struct Timer<'q,'h> {
     handle: Option<timer_t>,
-    _callback: Box<MutWrapper<'h>>,
+    callback: Box<MutWrapper<'h>>,
     _life: PhantomData<&'q ()>
 }
 
@@ -87,7 +87,7 @@ impl TimerQueue {
 
         timer_unsafe.map(|t| Timer::<'q,'h> {
             handle: Some(t as timer_t),
-            _callback: callback,
+            callback: callback,
             _life: PhantomData
         })
     }
@@ -155,11 +155,24 @@ fn to_timespec(value: Duration) -> timespec {
 impl<'q,'h> Drop for Timer<'q,'h> {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
+            let mut is_deleted = self.callback.mark_deleted.write().unwrap();
+            *is_deleted = true;
+
             unsafe {
                 if timer_delete(handle) < 0 {
                     let e = get_errno();
                     println!("WARNING: an error occurred during timer destruction. Memory might leak. Error = {e:?}");
                 }
+            }
+
+            let acceptable_execution_time = match self.callback.hints {
+                Some(CallbackHint::SlowFunction(d)) => d,
+                _ => crate::DEFAULT_ACCEPTABLE_EXECUTION_TIME
+            };
+            if !self.callback.idling.wait_one(acceptable_execution_time).unwrap() {
+                println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! \
+                Program aborts!");
+                process::abort();
             }
         }
     }

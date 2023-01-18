@@ -4,10 +4,10 @@ use crate::{
 };
 
 pub(crate) struct MutWrapper<'h> {
-    hints: Option<CallbackHint>,
+    pub hints: Option<CallbackHint>,
     f: Box<dyn FnMut() + 'h>,
-    idling: ManualResetEvent,
-    mark_deleted: RwLock<bool>
+    pub idling: ManualResetEvent,
+    pub mark_deleted: RwLock<bool>
 }
 
 struct CriticalSection<'e> {
@@ -24,8 +24,6 @@ impl<'h> MutWrapper<'h> {
             mark_deleted: RwLock::new(false)
         }
     }
-    #[inline]
-    pub fn hints(&self) -> &Option<CallbackHint> { &self.hints }
     pub fn call(&mut self) -> Result<()> {
         let is_deleted = self.mark_deleted.read().unwrap();
         if !*is_deleted {
