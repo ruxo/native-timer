@@ -18,13 +18,14 @@ pub(crate) use waitable_objects::ManualResetEvent;
 
 // ----------------------------------------- DATA STRUCTURE --------------------------------------------------
 pub struct TimerQueue {
-    dispatcher: Sender<TimerCreationUnsafeRequest>,
-    timer_receiver: Receiver<(usize, Result<usize>)>
+    timer_queue: Sender<TimerCreationUnsafeRequest>,
+    timer_receiver: Receiver<(usize, Result<usize>)>,
+    quick_dispatcher: Sender<usize>
 }
 
 pub struct Timer<'q,'h> {
     handle: Option<timer_t>,
-    callback: Box<MutWrapper<'h>>,
+    callback: Box<MutWrapper<'q,'h>>,
     _life: PhantomData<&'q ()>
 }
 
@@ -67,27 +68,34 @@ impl TimerQueue {
                         result_sender.send((req.callback_ref, timer.map(|t| t as usize))).unwrap();
                     }
                 });
-                DEFAULT_QUEUE = Some(TimerQueue { dispatcher, timer_receiver });
+
+                let (quick_dispatcher, quick_queue) = channel();
+                thread::spawn(move || {
+                    for ctx in quick_queue {
+                        Self::unsafe_call(ctx);
+                    }
+                });
+                DEFAULT_QUEUE = Some(TimerQueue { timer_queue: dispatcher, timer_receiver, quick_dispatcher });
             });
             DEFAULT_QUEUE.as_ref().unwrap()
         }
     }
 
-    pub fn schedule_timer<'q,'h, F>(&self, due: Duration, period: Duration, hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q,'h>>
+    pub fn schedule_timer<'q,'h, F>(&'q self, due: Duration, period: Duration, hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q,'h>>
         where F: FnMut() + Send + 'h
     {
-        let callback = Box::new(MutWrapper::new(hints, handler));
+        let callback = Box::new( MutWrapper::new(self, hints, handler));
         let callback_ref = callback.as_ref() as *const MutWrapper as usize;
         let unsafe_request = TimerCreationUnsafeRequest { due, period, callback_ref };
 
-        self.dispatcher.send(unsafe_request).unwrap();
+        self.timer_queue.send(unsafe_request).unwrap();
 
         let (id, timer_unsafe) = self.timer_receiver.recv().unwrap();
         assert_eq!(id, callback_ref);
 
         timer_unsafe.map(|t| Timer::<'q,'h> {
             handle: Some(t as timer_t),
-            callback: callback,
+            callback,
             _life: PhantomData
         })
     }
@@ -125,14 +133,22 @@ impl TimerQueue {
         }
     }
 
-    extern "C" fn timer_callback(_id: c_int, signal: *mut siginfo_t, _uc: *mut c_void){
-        let ctx = unsafe { Self::get_ptr(signal) };
+    fn unsafe_call(ctx: usize) {
         thread::spawn(move || {
             let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
             if let Err(e) = wrapper.call() {
                 println!("WARNING: Error occurred during timer callback: {e:?}");
             }
         });
+    }
+
+    extern "C" fn timer_callback(_id: c_int, signal: *mut siginfo_t, _uc: *mut c_void){
+        let ctx = unsafe { Self::get_ptr(signal) };
+        let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
+        match wrapper.hints {
+            Some(CallbackHint::SlowFunction(_)) => Self::unsafe_call(ctx.try_into().unwrap()),
+            _ => wrapper.main_queue.quick_dispatcher.send(ctx.try_into().unwrap()).unwrap()
+        }
     }
 
     #[allow(deprecated)]

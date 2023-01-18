@@ -1,9 +1,10 @@
 use std::sync::RwLock;
 use crate::{
-    Result, platform::ManualResetEvent, CallbackHint
+    Result, platform, platform::ManualResetEvent, CallbackHint
 };
 
-pub(crate) struct MutWrapper<'h> {
+pub(crate) struct MutWrapper<'q, 'h> {
+    pub main_queue: &'q platform::TimerQueue,
     pub hints: Option<CallbackHint>,
     f: Box<dyn FnMut() + 'h>,
     pub idling: ManualResetEvent,
@@ -15,9 +16,10 @@ struct CriticalSection<'e> {
 }
 
 // ------------------------------ IMPLEMENTATIONS ------------------------------
-impl<'h> MutWrapper<'h> {
-    pub fn new<F>(hints: Option<CallbackHint>, handler: F) -> Self where F: FnMut() + Send + 'h {
-        MutWrapper::<'h> {
+impl<'q,'h> MutWrapper<'q,'h> {
+    pub fn new<F>(main_queue: &'q platform::TimerQueue, hints: Option<CallbackHint>, handler: F) -> Self where F: FnMut() + Send + 'h {
+        MutWrapper::<'q,'h> {
+            main_queue,
             hints,
             f: Box::new(handler),
             idling: ManualResetEvent::new_init(true),

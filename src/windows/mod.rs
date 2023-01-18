@@ -10,6 +10,7 @@ use windows::Win32::{
 };
 use super::timer::{CallbackHint, Result, DEFAULT_ACCEPTABLE_EXECUTION_TIME};
 use waitable_objects::{get_last_error, get_win32_last_error, to_result};
+use crate::common::MutWrapper;
 
 mod waitable_objects;
 pub(crate) use waitable_objects::ManualResetEvent;
@@ -39,7 +40,7 @@ pub struct TimerQueue {
 pub struct Timer<'q, 'h> {
     queue: &'q TimerQueue,
     handle: HANDLE,
-    callback: Box<MutWrapper<'h>>,
+    callback: Box<MutWrapper<'q,'h>>,
     acceptable_execution_time: Duration
 }
 
@@ -63,7 +64,7 @@ impl TimerQueue {
         let option = if period == 0 { option | WT_EXECUTEONLYONCE } else { option };
 
         let mut timer_handle = HANDLE::default();
-        let callback = Box::new(MutWrapper::new(hints, handler));
+        let callback = Box::new(MutWrapper::new(self, hints, handler));
         let callback_ref = callback.as_ref() as *const MutWrapper as *const c_void;
 
         let create_timer_queue_timer_result = unsafe {
