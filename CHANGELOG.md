@@ -4,6 +4,8 @@
 - Break `TimerQueue::default()` signature compatibility. Now it returns a reference.
 - Break `CallerHint::SlowFunction` signature to accept an "acceptable execution time", time that the handler is 
   expected to complete during the timer's destruction.
+- Linux version now has dedicated threads for timer, and quick function dispatcher. For slow function dispatch, queue
+  will spawn a new thread for every slow function.
 
 ### 0.2.0
 

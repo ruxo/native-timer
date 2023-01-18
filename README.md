@@ -3,12 +3,10 @@
 Provide a timer functionality which uses OS capabilities. Currently supports
 Windows, Linux, and MacOS.
 
-v0.2.0 Both Windows and Linux platforms are supported
+v0.3.0 Both Windows and Linux platforms are supported.
 
-However, Linux timers currently use the caller thread to execute the timer handler. So if the handler takes long execution time, it will
-impact the schedule for shared timers. However, a timer with `CallbackHint::SlowFunction` will have its own dedicated thread per timer
-instance, but it's still subjected to the time spent by the handler. _Next version_ will try to dispatch call to the slow function by 
-separated threads.
+However, Linux timers is limited to x64 machine because the code that passes a pointer from signal function, assume x64
+architecture when retrieving the passing pointer. I'll need some research for better solution.
 
 ## Examples
 
