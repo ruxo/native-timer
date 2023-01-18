@@ -4,6 +4,7 @@ use std::{
 use crate::{ TimerQueue, Timer };
 
 /// Scheduler hint about the callback function.
+#[derive(Copy, Clone)]
 pub enum CallbackHint {
     /// The callback function execution is quick. The scheduler may use a common timer thread for executing the function.
     QuickFunction,

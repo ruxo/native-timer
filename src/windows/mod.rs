@@ -1,5 +1,3 @@
-mod waitable_objects;
-
 use std::{
     time::Duration,
     sync::RwLock,
@@ -11,7 +9,10 @@ use windows::Win32::{
     System::Threading::*,
 };
 use super::timer::{CallbackHint, Result, DEFAULT_ACCEPTABLE_EXECUTION_TIME};
-use waitable_objects::{ManualResetEvent, get_last_error, get_win32_last_error, to_result};
+use waitable_objects::{get_last_error, get_win32_last_error, to_result};
+
+mod waitable_objects;
+pub(crate) use waitable_objects::ManualResetEvent;
 
 // ------------------ DATA STRUCTURE -------------------------------
 /// Wrapper of Windows Timer Queue API
@@ -42,49 +43,7 @@ pub struct Timer<'q, 'h> {
     acceptable_execution_time: Duration
 }
 
-struct CriticalSection<'e> {
-    idling: &'e mut ManualResetEvent
-}
-
-struct MutWrapper<'h> {
-    f: Box<dyn FnMut() + 'h>,
-    idling: ManualResetEvent,
-    mark_deleted: RwLock<bool>
-}
-
 // ------------------ IMPLEMENTATIONS -------------------------------
-impl<'e> CriticalSection<'e> {
-    fn new(idling: &'e mut ManualResetEvent) -> Self {
-        idling.reset().unwrap();
-        Self { idling }
-    }
-}
-
-impl<'e> Drop for CriticalSection<'e> {
-    fn drop(&mut self) {
-        self.idling.set().unwrap();
-    }
-}
-
-impl<'h> MutWrapper<'h> {
-    fn new<F>(handler: F) -> Self where F: FnMut() + Send + 'h {
-        MutWrapper::<'h> {
-            f: Box::new(handler),
-            idling: ManualResetEvent::new_init(true),
-            mark_deleted: RwLock::new(false)
-        }
-    }
-    fn call(&mut self) -> Result<()> {
-        let is_deleted = self.mark_deleted.read().unwrap();
-        if !*is_deleted {
-            let cs = CriticalSection::new(&mut self.idling);
-            (self.f)();
-            drop(cs);
-        }
-        Ok(())
-    }
-}
-
 static DEFAULT_QUEUE: TimerQueue = TimerQueue { handle: HANDLE(0) };
 
 impl TimerQueue {
@@ -104,7 +63,7 @@ impl TimerQueue {
         let option = if period == 0 { option | WT_EXECUTEONLYONCE } else { option };
 
         let mut timer_handle = HANDLE::default();
-        let callback = Box::new(MutWrapper::new(handler));
+        let callback = Box::new(MutWrapper::new(hints, handler));
         let callback_ref = callback.as_ref() as *const MutWrapper as *const c_void;
 
         let create_timer_queue_timer_result = unsafe {

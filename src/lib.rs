@@ -11,6 +11,7 @@ mod unix;
 use crate::unix as platform;
 
 mod timer;
+mod common;
 
 pub use platform::{ TimerQueue, Timer };
 pub use timer::*;
