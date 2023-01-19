@@ -29,9 +29,8 @@ impl<'q,'h> MutWrapper<'q,'h> {
     pub fn call(&mut self) -> Result<()> {
         let is_deleted = self.mark_deleted.read().unwrap();
         if !*is_deleted {
-            let cs = CriticalSection::new(&mut self.idling);
+            let _ = &CriticalSection::new(&mut self.idling);    // Note, borrowing is important for crit scope!
             (self.f)();
-            drop(cs);
         }
         Ok(())
     }

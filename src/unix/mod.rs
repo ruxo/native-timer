@@ -7,7 +7,7 @@ use std::{
 };
 use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall,
            SYS_gettid, timer_create,
-           itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_MONOTONIC};
+           itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_REALTIME};
 use crate::{
     CallbackHint, Result, TimerError,
     common::MutWrapper
@@ -126,7 +126,7 @@ impl TimerQueue {
             sev.sigev_notify = SIGEV_THREAD_ID;
             sev.sigev_notify_thread_id = syscall(SYS_gettid) as i32;
             let mut timer = ptr::null_mut();
-            to_result(timer_create(CLOCK_MONOTONIC, &mut sev, &mut timer))?;
+            to_result(timer_create(CLOCK_REALTIME, &mut sev, &mut timer))?;
 
             let interval = itimerspec {
                 it_value: to_timespec(due),
@@ -148,21 +148,12 @@ impl TimerQueue {
     }
 
     extern "C" fn timer_callback(_id: c_int, signal: *mut siginfo_t, _uc: *mut c_void){
-        let ctx = unsafe { Self::get_ptr(signal) };
+        let ctx = unsafe { (*signal).si_value().sival_ptr as usize };
         let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
         match wrapper.hints {
             Some(CallbackHint::SlowFunction(_)) => Self::unsafe_call(ctx.try_into().unwrap()),
             _ => wrapper.main_queue.quick_dispatcher.send(ctx.try_into().unwrap()).unwrap()
         }
-    }
-
-    #[allow(deprecated)]
-    unsafe extern "C" fn get_ptr(si: *mut siginfo_t) -> u64 {
-        // TODO: Assume the running machine is x64 !
-        // TODO: This depends on the deprecated field of libc crate, and may only work on a specific platforms.
-        let ptr_lsb = (*si)._pad[3];
-        let ptr_msb = (*si)._pad[4];
-        ((ptr_msb as u64) << 32) | (ptr_lsb as u64 & 0xFFFF_FFFF)
     }
 }
 
