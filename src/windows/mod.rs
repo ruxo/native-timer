@@ -1,6 +1,5 @@
 use std::{
     time::Duration,
-    sync::RwLock,
     ffi::c_void,
     process::abort
 };

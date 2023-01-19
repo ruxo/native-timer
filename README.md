@@ -3,10 +3,7 @@
 Provide a timer functionality which uses OS capabilities. Currently supports
 Windows, Linux, and MacOS.
 
-v0.3.0 Both Windows and Linux platforms are supported.
-
-However, Linux timers is limited to x64 machine because the code that passes a pointer from signal function, assume x64
-architecture when retrieving the passing pointer. I'll need some research for better solution.
+v0.3.1 Both Windows and Linux platforms are supported.
 
 ## Examples
 

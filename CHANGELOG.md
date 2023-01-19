@@ -1,3 +1,6 @@
+### 0.3.1
+- Unix's TimerQueue now has `new()` function.
+
 ### 0.3.0
 
 - Minor document fixes

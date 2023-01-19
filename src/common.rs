@@ -3,9 +3,11 @@ use crate::{
     Result, platform, platform::ManualResetEvent, CallbackHint
 };
 
+#[allow(dead_code)]
 pub(crate) struct MutWrapper<'q, 'h> {
     pub main_queue: &'q platform::TimerQueue,
     pub hints: Option<CallbackHint>,
+
     f: Box<dyn FnMut() + 'h>,
     pub idling: ManualResetEvent,
     pub mark_deleted: RwLock<bool>
