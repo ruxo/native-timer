@@ -56,26 +56,31 @@ static DEFAULT_QUEUE_ONCE: sync::Once = sync::Once::new();
 static mut DEFAULT_QUEUE: Option<TimerQueue> = None;
 
 impl TimerQueue {
+    /// Create a new TimerQueue
+    pub fn new() -> Self {
+        let (dispatcher, receiver) = channel::<TimerCreationUnsafeRequest>();
+        let (result_sender, timer_receiver) = channel();
+        thread::spawn(move || {
+            for req in receiver {
+                let timer = Self::create_timer(req.due, req.period, req.callback_ref);
+                result_sender.send((req.callback_ref, timer.map(|t| t as usize))).unwrap();
+            }
+        });
+
+        let (quick_dispatcher, quick_queue) = channel();
+        thread::spawn(move || {
+            for ctx in quick_queue {
+                Self::unsafe_call(ctx);
+            }
+        });
+        TimerQueue { timer_queue: dispatcher, timer_receiver, quick_dispatcher }
+    }
+
     /// Default OS common timer queue
     pub fn default() -> &'static TimerQueue {
         unsafe {
             DEFAULT_QUEUE_ONCE.call_once(|| {
-                let (dispatcher, receiver) = channel::<TimerCreationUnsafeRequest>();
-                let (result_sender, timer_receiver) = channel();
-                thread::spawn(move || {
-                    for req in receiver {
-                        let timer = Self::create_timer(req.due, req.period, req.callback_ref);
-                        result_sender.send((req.callback_ref, timer.map(|t| t as usize))).unwrap();
-                    }
-                });
-
-                let (quick_dispatcher, quick_queue) = channel();
-                thread::spawn(move || {
-                    for ctx in quick_queue {
-                        Self::unsafe_call(ctx);
-                    }
-                });
-                DEFAULT_QUEUE = Some(TimerQueue { timer_queue: dispatcher, timer_receiver, quick_dispatcher });
+                DEFAULT_QUEUE = Some(Self::new());
             });
             DEFAULT_QUEUE.as_ref().unwrap()
         }

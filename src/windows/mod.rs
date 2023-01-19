@@ -48,6 +48,7 @@ pub struct Timer<'q, 'h> {
 static DEFAULT_QUEUE: TimerQueue = TimerQueue { handle: HANDLE(0) };
 
 impl TimerQueue {
+    /// Create a new TimerQueue
     pub fn new() -> Self {
         unsafe { Self { handle: CreateTimerQueue().unwrap() } }
     }
