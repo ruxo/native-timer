@@ -1,3 +1,6 @@
+### 0.3.2
+- Unix: Remove thread spawning for Fast function timers since it should just use the common, single quick thread.
+
 ### 0.3.1
 - Unix's TimerQueue now has `new()` function.
 

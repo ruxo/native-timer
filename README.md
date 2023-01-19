@@ -3,7 +3,7 @@
 Provide a timer functionality which uses OS capabilities. Currently supports
 Windows, Linux, and MacOS.
 
-v0.3.1 Both Windows and Linux platforms are supported.
+As current version, only both Windows and Linux platforms are supported.
 
 ## Examples
 

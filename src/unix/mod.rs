@@ -139,20 +139,18 @@ impl TimerQueue {
     }
 
     fn unsafe_call(ctx: usize) {
-        thread::spawn(move || {
-            let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
-            if let Err(e) = wrapper.call() {
-                println!("WARNING: Error occurred during timer callback: {e:?}");
-            }
-        });
+        let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
+        if let Err(e) = wrapper.call() {
+            println!("WARNING: Error occurred during timer callback: {e:?}");
+        }
     }
 
     extern "C" fn timer_callback(_id: c_int, signal: *mut siginfo_t, _uc: *mut c_void){
         let ctx = unsafe { (*signal).si_value().sival_ptr as usize };
         let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
         match wrapper.hints {
-            Some(CallbackHint::SlowFunction(_)) => Self::unsafe_call(ctx.try_into().unwrap()),
-            _ => wrapper.main_queue.quick_dispatcher.send(ctx.try_into().unwrap()).unwrap()
+            Some(CallbackHint::SlowFunction(_)) => { thread::spawn(move || { Self::unsafe_call(ctx) }); },
+            _ => wrapper.main_queue.quick_dispatcher.send(ctx).unwrap()
         }
     }
 }
