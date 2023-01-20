@@ -62,17 +62,7 @@ pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handle
     TimerQueue::default().schedule_timer(due, Duration::ZERO, hint, handler).map(|t| TimerHandle(t))
 }
 
-struct OneshotJournal {
-    timer: Option<TimerHandle<'static>>
-}
-
 // ----------------------------------------- IMPLEMENTATIONS ------------------------------------------
-impl OneshotJournal {
-    fn new() -> Self {
-        Self { timer: None }
-    }
-}
-
 impl Display for TimerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {

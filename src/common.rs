@@ -1,6 +1,6 @@
-use std::sync::RwLock;
+use parking_lot::RwLock;
 use crate::{
-    Result, platform, platform::ManualResetEvent, CallbackHint
+    Result, platform, CallbackHint
 };
 
 #[allow(dead_code)]
@@ -10,10 +10,6 @@ pub(crate) struct MutWrapper<'q, 'h> {
 
     f: Box<dyn FnMut() + 'h>,
     pub mark_deleted: RwLock<bool>
-}
-
-struct CriticalSection<'e> {
-    idling: &'e mut ManualResetEvent
 }
 
 // ------------------------------ IMPLEMENTATIONS ------------------------------
@@ -27,7 +23,7 @@ impl<'q,'h> MutWrapper<'q,'h> {
         }
     }
     pub fn call(&mut self) -> Result<()> {
-        let is_deleted = self.mark_deleted.read().unwrap();
+        let is_deleted = self.mark_deleted.read();
         if !*is_deleted {
             (self.f)();
         }

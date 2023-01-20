@@ -1,3 +1,7 @@
+### 0.4.0
+- Use `parking_lot` lib
+- Introduce `fire_oneshot`, fire-and-forget about lifetime management!
+
 ### 0.3.3
 - Split wait object code into `sync-wait-object` library.
 

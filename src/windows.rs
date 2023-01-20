@@ -2,6 +2,7 @@ use std::{
     time::Duration,
     ffi::c_void
 };
+use std::process::abort;
 use sync_wait_object::WaitEvent;
 use windows::Win32::{
     Foundation::{HANDLE, BOOLEAN, ERROR_IO_PENDING, WIN32_ERROR, GetLastError},
@@ -10,8 +11,6 @@ use windows::Win32::{
 use super::timer::{CallbackHint, Result, DEFAULT_ACCEPTABLE_EXECUTION_TIME};
 use crate::common::MutWrapper;
 use super::TimerError;
-
-pub(crate) use sync_wait_object::windows::ManualResetEvent;
 
 // ------------------ DATA STRUCTURE -------------------------------
 /// Wrapper of Windows Timer Queue API
@@ -62,8 +61,15 @@ fn change_period(queue: HANDLE, timer: HANDLE, due: Duration, period: Duration) 
 }
 
 fn close_timer(queue: HANDLE, handle: HANDLE, acceptable_execution_time: Duration, callback: &MutWrapper) {
-    let mut is_deleted = callback.mark_deleted.write().unwrap();
-    *is_deleted = true;
+    match callback.mark_deleted.try_write_for(acceptable_execution_time) {
+        None => {
+            println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
+            abort();
+        },
+        Some(mut is_deleted) => {
+            *is_deleted = true;
+        }
+    }
 
     // ensure no callback during destruction
     change_period(queue, handle, Duration::default(), Duration::default()).unwrap();
@@ -133,7 +139,7 @@ impl TimerQueue {
         let period = period.as_millis() as u32;
         let option = hint.map(|o| match o {
             CallbackHint::QuickFunction => WT_EXECUTEINPERSISTENTTHREAD,
-            CallbackHint::SlowFunction(t) => WT_EXECUTELONGFUNCTION
+            CallbackHint::SlowFunction(_) => WT_EXECUTELONGFUNCTION
         }).unwrap_or(WT_EXECUTEDEFAULT);
         let option = if period == 0 { option | WT_EXECUTEONLYONCE } else { option };
 
