@@ -1,5 +1,4 @@
 use std::sync::RwLock;
-use sync_wait_object::SignalWaitable;
 use crate::{
     Result, platform, platform::ManualResetEvent, CallbackHint
 };
@@ -10,7 +9,6 @@ pub(crate) struct MutWrapper<'q, 'h> {
     pub hints: Option<CallbackHint>,
 
     f: Box<dyn FnMut() + 'h>,
-    pub idling: ManualResetEvent,
     pub mark_deleted: RwLock<bool>
 }
 
@@ -25,30 +23,14 @@ impl<'q,'h> MutWrapper<'q,'h> {
             main_queue,
             hints,
             f: Box::new(handler),
-            idling: ManualResetEvent::new_init(true),
             mark_deleted: RwLock::new(false)
         }
     }
     pub fn call(&mut self) -> Result<()> {
         let is_deleted = self.mark_deleted.read().unwrap();
         if !*is_deleted {
-            let _ = &CriticalSection::new(&mut self.idling);    // Note, borrowing is important for crit scope!
             (self.f)();
         }
         Ok(())
     }
 }
-
-impl<'e> CriticalSection<'e> {
-    fn new(idling: &'e mut ManualResetEvent) -> Self {
-        idling.reset().unwrap();
-        Self { idling }
-    }
-}
-
-impl<'e> Drop for CriticalSection<'e> {
-    fn drop(&mut self) {
-        self.idling.set().unwrap();
-    }
-}
-

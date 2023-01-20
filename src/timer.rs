@@ -1,10 +1,12 @@
 use std::{
-    fmt::{Display, Formatter}, fmt, time::Duration
+    fmt::{Display, Formatter}, fmt,
+    time::Duration
 };
+use sync_wait_object::WaitObjectError;
 use crate::{ TimerQueue, Timer };
 
 /// Scheduler hint about the callback function.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum CallbackHint {
     /// The callback function execution is quick. The scheduler may use a common timer thread for executing the function.
     QuickFunction,
@@ -60,6 +62,17 @@ pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handle
     TimerQueue::default().schedule_timer(due, Duration::ZERO, hint, handler).map(|t| TimerHandle(t))
 }
 
+struct OneshotJournal {
+    timer: Option<TimerHandle<'static>>
+}
+
+// ----------------------------------------- IMPLEMENTATIONS ------------------------------------------
+impl OneshotJournal {
+    fn new() -> Self {
+        Self { timer: None }
+    }
+}
+
 impl Display for TimerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -72,6 +85,16 @@ impl Display for TimerError {
 impl<T> From<std::sync::PoisonError<T>> for TimerError {
     fn from(_value: std::sync::PoisonError<T>) -> Self {
         Self::SynchronizationBroken
+    }
+}
+
+impl From<WaitObjectError> for TimerError {
+    fn from(value: WaitObjectError) -> Self {
+        match value {
+            WaitObjectError::OsError(v, s) => TimerError::OsError(v, s),
+            WaitObjectError::SynchronizationBroken => TimerError::SynchronizationBroken,
+            WaitObjectError::Timeout => TimerError::SynchronizationBroken
+        }
     }
 }
 
