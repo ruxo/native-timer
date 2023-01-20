@@ -8,13 +8,13 @@ use std::{
 use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall,
            SYS_gettid, timer_create,
            itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_REALTIME};
+use sync_wait_object::SignalWaitable;
 use crate::{
     CallbackHint, Result, TimerError,
     common::MutWrapper
 };
 
-mod waitable_objects;
-pub(crate) use waitable_objects::ManualResetEvent;
+pub(crate) use sync_wait_object::ManualResetEvent;
 
 // ----------------------------------------- DATA STRUCTURE --------------------------------------------------
 pub struct TimerQueue {
@@ -179,7 +179,7 @@ impl<'q,'h> Drop for Timer<'q,'h> {
                 Some(CallbackHint::SlowFunction(d)) => d,
                 _ => crate::DEFAULT_ACCEPTABLE_EXECUTION_TIME
             };
-            if !self.callback.idling.wait_one(acceptable_execution_time).unwrap() {
+            if !self.callback.idling.wait(acceptable_execution_time).unwrap() {
                 println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! \
                 Program aborts!");
                 process::abort();

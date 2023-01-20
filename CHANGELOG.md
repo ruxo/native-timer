@@ -1,3 +1,6 @@
+### 0.3.3
+- Split wait object code into `sync-wait-object` library.
+
 ### 0.3.2
 - Unix: Remove thread spawning for Fast function timers since it should just use the common, single quick thread.
 

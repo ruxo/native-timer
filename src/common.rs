@@ -1,4 +1,5 @@
 use std::sync::RwLock;
+use sync_wait_object::SignalWaitable;
 use crate::{
     Result, platform, platform::ManualResetEvent, CallbackHint
 };

@@ -1,7 +1,7 @@
 [package]
 name = "native-timer"
 authors = ["Ruxo Zheng <me@ruxoz.net>"]
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 
 description = "Timer library which uses OS timer capabilities."
@@ -14,6 +14,7 @@ keywords = ["native", "timer", "schedule"]
 categories = ["concurrency", "os::windows-apis", "os::unix-apis"]
 
 [dependencies]
+sync-wait-object = "0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

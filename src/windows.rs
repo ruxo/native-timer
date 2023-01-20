@@ -3,16 +3,16 @@ use std::{
     ffi::c_void,
     process::abort
 };
+use sync_wait_object::SignalWaitable;
 use windows::Win32::{
-    Foundation::{HANDLE, BOOLEAN, ERROR_IO_PENDING},
+    Foundation::{HANDLE, BOOLEAN, ERROR_IO_PENDING, WIN32_ERROR, GetLastError},
     System::Threading::*,
 };
 use super::timer::{CallbackHint, Result, DEFAULT_ACCEPTABLE_EXECUTION_TIME};
-use waitable_objects::{get_last_error, get_win32_last_error, to_result};
 use crate::common::MutWrapper;
+use super::TimerError;
 
-mod waitable_objects;
-pub(crate) use waitable_objects::ManualResetEvent;
+pub(crate) use sync_wait_object::windows::ManualResetEvent;
 
 // ------------------ DATA STRUCTURE -------------------------------
 /// Wrapper of Windows Timer Queue API
@@ -42,8 +42,23 @@ pub struct Timer<'q, 'h> {
     callback: Box<MutWrapper<'q,'h>>,
     acceptable_execution_time: Duration
 }
+// ----------------------------------------- FUNCTIONS ------------------------------------------------
+#[inline]
+pub(crate) fn get_win32_last_error() -> WIN32_ERROR {
+    unsafe { GetLastError() }
+}
 
-// ------------------ IMPLEMENTATIONS -------------------------------
+#[inline]
+pub(crate) fn get_last_error() -> TimerError {
+    get_win32_last_error().into()
+}
+
+pub(crate) fn to_result(ret: bool) -> Result<()> {
+    if ret { Ok(()) }
+    else { Err(get_last_error()) }
+}
+
+// -------------------------------------- IMPLEMENTATIONS --------------------------------------------
 static DEFAULT_QUEUE: TimerQueue = TimerQueue { handle: HANDLE(0) };
 
 impl TimerQueue {
@@ -116,7 +131,7 @@ impl<'q, 'h> Drop for Timer<'q, 'h> {
             // ensure no callback during destruction
             self.change_period(Duration::default(), Duration::default()).unwrap();
 
-            if !self.callback.idling.wait_one(self.acceptable_execution_time).unwrap() {
+            if !self.callback.idling.wait(self.acceptable_execution_time).unwrap() {
                 println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
                 abort();
             }
@@ -131,6 +146,12 @@ impl<'q, 'h> Drop for Timer<'q, 'h> {
             }
             self.handle = HANDLE::default();
         }
+    }
+}
+
+impl From<WIN32_ERROR> for TimerError {
+    fn from(value: WIN32_ERROR) -> Self {
+        TimerError::OsError(value.0 as isize, value.to_hresult().message().to_string())
     }
 }
 
