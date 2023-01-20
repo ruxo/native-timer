@@ -8,13 +8,10 @@ use std::{
 use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall,
            SYS_gettid, timer_create,
            itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_REALTIME};
-use sync_wait_object::SignalWaitable;
 use crate::{
     CallbackHint, Result, TimerError,
     common::MutWrapper
 };
-
-pub(crate) use sync_wait_object::ManualResetEvent;
 
 // ----------------------------------------- DATA STRUCTURE --------------------------------------------------
 pub struct TimerQueue {
@@ -49,6 +46,29 @@ fn to_error(err_no: c_int) -> TimerError {
 fn to_result(ret: c_int) -> Result<()> {
     if ret == 0 { Ok(()) }
     else { Err(get_errno()) }
+}
+
+fn close_timer(handle: timer_t, callback: &MutWrapper){
+    let acceptable_execution_time = match callback.hints {
+        Some(CallbackHint::SlowFunction(d)) => d,
+        _ => crate::DEFAULT_ACCEPTABLE_EXECUTION_TIME
+    };
+    match callback.mark_deleted.try_write_for(acceptable_execution_time) {
+        None => {
+            println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
+            process::abort();
+        },
+        Some(mut is_deleted) => {
+            *is_deleted = true;
+        }
+    }
+    unsafe {
+        if timer_delete(handle) < 0 {
+            let e = get_errno();
+            println!("WARNING: an error occurred during timer destruction. Memory might leak. Error = {e:?}");
+        }
+    }
+
 }
 
 // ----------------------------------------- IMPLEMENTATIONS --------------------------------------------------
@@ -103,6 +123,10 @@ impl TimerQueue {
             callback,
             _life: PhantomData
         })
+    }
+
+    pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<()> where F: FnMut() + Send + 'static {
+        Ok(())
     }
 
     fn create_timer(due: Duration, period: Duration, callback_ref: usize) -> Result<timer_t>
@@ -165,25 +189,7 @@ fn to_timespec(value: Duration) -> timespec {
 impl<'q,'h> Drop for Timer<'q,'h> {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            let mut is_deleted = self.callback.mark_deleted.write().unwrap();
-            *is_deleted = true;
-
-            unsafe {
-                if timer_delete(handle) < 0 {
-                    let e = get_errno();
-                    println!("WARNING: an error occurred during timer destruction. Memory might leak. Error = {e:?}");
-                }
-            }
-
-            let acceptable_execution_time = match self.callback.hints {
-                Some(CallbackHint::SlowFunction(d)) => d,
-                _ => crate::DEFAULT_ACCEPTABLE_EXECUTION_TIME
-            };
-            if !self.callback.idling.wait(acceptable_execution_time).unwrap() {
-                println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! \
-                Program aborts!");
-                process::abort();
-            }
+            close_timer(handle, &self.callback);
         }
     }
 }
