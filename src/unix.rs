@@ -14,12 +14,12 @@ use crate::{
 };
 
 // ------------------------------------- DATA STRUCTURE & MARKERS -------------------------------------
-type MutWrapperUnsafeRepr = usize;
-pub struct TimerQueue {
+pub struct TimerQueueCore {
     timer_queue: Sender<TimerCreationUnsafeRequest>,
     quick_dispatcher: Sender<MutWrapperUnsafeRepr>
 }
-unsafe impl Send for TimerQueue {}
+
+pub struct TimerQueue(sync::Arc<TimerQueueCore>);
 
 pub struct Timer<'q,'h> {
     handle: Option<timer_t>,
@@ -27,6 +27,7 @@ pub struct Timer<'q,'h> {
     _life: PhantomData<&'q ()>
 }
 
+type MutWrapperUnsafeRepr = usize;
 type TimerHandleUnsafeRepr = usize;
 type TimerHandleResult = Result<TimerHandleUnsafeRepr>;
 
@@ -98,7 +99,9 @@ impl TimerQueue {
                 Self::unsafe_call(ctx);
             }
         });
-        TimerQueue { timer_queue: dispatcher, quick_dispatcher }
+        TimerQueue(sync::Arc::new(TimerQueueCore{
+            timer_queue: dispatcher, quick_dispatcher
+        }))
     }
 
     /// Default OS common timer queue
@@ -151,16 +154,25 @@ impl TimerQueue {
         }
     }
 
+    #[inline]
+    pub(crate) fn new_with_context(context: sync::Arc<TimerQueueCore>) -> Self {
+        TimerQueue(context)
+    }
+
+    fn dispatch_quick_call(&self, ctx: MutWrapperUnsafeRepr) -> Result<()> {
+        self.0.quick_dispatcher.send(ctx).map_err(|_| TimerError::SynchronizationBroken)
+    }
+
     fn create_timer<'q,'h, F>(&'q self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F)
                               -> Result<(TimerHandleResult, Box<MutWrapper<'q,'h>>)>
         where F: FnMut() + Send + 'h
     {
-        let callback = Box::new( MutWrapper::<'q,'h>::new(self, hint, handler));
+        let callback = Box::new( MutWrapper::<'q,'h>::new(self.0.clone(), hint, handler));
         let callback_ref = callback.as_ref() as *const MutWrapper as MutWrapperUnsafeRepr;
         let (signal, timer_receiver) = channel();
         let unsafe_request = TimerCreationUnsafeRequest { due, period, callback_ref, signal };
 
-        self.timer_queue.send(unsafe_request).unwrap();
+        self.0.timer_queue.send(unsafe_request).unwrap();
 
         match timer_receiver.recv() {
             Err(_) => Err(TimerError::SynchronizationBroken),
@@ -214,7 +226,7 @@ impl TimerQueue {
         let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
         match wrapper.hints {
             Some(CallbackHint::SlowFunction(_)) => { thread::spawn(move || { Self::unsafe_call(ctx) }); },
-            _ => wrapper.main_queue.quick_dispatcher.send(ctx).unwrap()
+            _ => wrapper.timer_queue().dispatch_quick_call(ctx).unwrap()
         }
     }
 }
