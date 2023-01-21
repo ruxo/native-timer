@@ -26,7 +26,7 @@ pub enum TimerError {
 
 pub type Result<T> = std::result::Result<T, TimerError>;
 
-pub struct TimerHandle<'h>(Timer<'static, 'h>);
+pub struct TimerHandle<'h>(Timer<'h>);
 
 pub const DEFAULT_ACCEPTABLE_EXECUTION_TIME: Duration = Duration::from_secs(1);
 

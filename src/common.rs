@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::sync;
 use parking_lot::RwLock;
 use crate::{
@@ -7,25 +6,22 @@ use crate::{
 
 use platform::{TimerQueue, TimerQueueCore};
 
-pub(crate) struct MutWrapper<'q, 'h> {
+pub(crate) struct MutWrapper<'h> {
     pub hints: Option<CallbackHint>,
     pub mark_deleted: RwLock<bool>,
 
     main_queue: sync::Arc<TimerQueueCore>,
-    f: Box<dyn FnMut() + 'h>,
-    // TODO going to remove 'q lifetime
-    _queue_lifetime: PhantomData<&'q ()>
+    f: Box<dyn FnMut() + 'h>
 }
 
 // ------------------------------ IMPLEMENTATIONS ------------------------------
-impl<'q,'h> MutWrapper<'q,'h> {
+impl<'h> MutWrapper<'h> {
     pub fn new<F>(main_queue: sync::Arc<TimerQueueCore>, hints: Option<CallbackHint>, handler: F) -> Self where F: FnMut() + Send + 'h {
-        MutWrapper::<'q,'h> {
+        MutWrapper::<'h> {
             hints,
             mark_deleted: RwLock::new(false),
             main_queue,
-            f: Box::new(handler),
-            _queue_lifetime: PhantomData
+            f: Box::new(handler)
         }
     }
     pub fn timer_queue(&self) -> TimerQueue {

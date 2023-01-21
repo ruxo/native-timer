@@ -1,5 +1,4 @@
 use std::{
-    marker::PhantomData,
     time::Duration,
     sync::mpsc::{channel, Sender},
     ffi::{c_void, CString},
@@ -21,10 +20,9 @@ pub struct TimerQueueCore {
 
 pub struct TimerQueue(sync::Arc<TimerQueueCore>);
 
-pub struct Timer<'q,'h> {
+pub struct Timer<'h> {
     handle: Option<timer_t>,
-    callback: Box<MutWrapper<'q,'h>>,
-    _life: PhantomData<&'q ()>
+    callback: Box<MutWrapper<'h>>
 }
 
 type MutWrapperUnsafeRepr = usize;
@@ -116,15 +114,14 @@ impl TimerQueue {
         }
     }
 
-    pub fn schedule_timer<'q,'h, F>(&'q self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'q,'h>>
+    pub fn schedule_timer<'h, F>(&self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>>
         where F: FnMut() + Send + 'h
     {
         let (timer_unsafe, callback) = self.create_timer(due, period, hint, handler)?;
 
-        timer_unsafe.map(|t| Timer::<'q,'h> {
+        timer_unsafe.map(|t| Timer::<'h> {
             handle: Some(t as timer_t),
-            callback,
-            _life: PhantomData
+            callback
         })
     }
 
@@ -163,11 +160,11 @@ impl TimerQueue {
         self.0.quick_dispatcher.send(ctx).map_err(|_| TimerError::SynchronizationBroken)
     }
 
-    fn create_timer<'q,'h, F>(&'q self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F)
-                              -> Result<(TimerHandleResult, Box<MutWrapper<'q,'h>>)>
+    fn create_timer<'h, F>(&self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F)
+                              -> Result<(TimerHandleResult, Box<MutWrapper<'h>>)>
         where F: FnMut() + Send + 'h
     {
-        let callback = Box::new( MutWrapper::<'q,'h>::new(self.0.clone(), hint, handler));
+        let callback = Box::new( MutWrapper::<'h>::new(self.0.clone(), hint, handler));
         let callback_ref = callback.as_ref() as *const MutWrapper as MutWrapperUnsafeRepr;
         let (signal, timer_receiver) = channel();
         let unsafe_request = TimerCreationUnsafeRequest { due, period, callback_ref, signal };
@@ -238,7 +235,7 @@ fn to_timespec(value: Duration) -> timespec {
     timespec { tv_sec: secs as c_long, tv_nsec: pure_ns as c_long }
 }
 
-impl<'q,'h> Drop for Timer<'q,'h> {
+impl<'h> Drop for Timer<'h> {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
             close_timer(handle, &self.callback);
