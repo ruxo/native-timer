@@ -1,7 +1,7 @@
 use std::{
     marker::PhantomData,
     time::Duration,
-    sync::mpsc::{channel, Sender, Receiver},
+    sync::mpsc::{channel, Sender},
     ffi::{c_void, CString},
     process, ptr, mem, thread, sync
 };
@@ -14,10 +14,10 @@ use crate::{
 };
 
 // ------------------------------------- DATA STRUCTURE & MARKERS -------------------------------------
+type MutWrapperUnsafeRepr = usize;
 pub struct TimerQueue {
     timer_queue: Sender<TimerCreationUnsafeRequest>,
-    timer_receiver: Receiver<(usize, Result<usize>)>,
-    quick_dispatcher: Sender<usize>
+    quick_dispatcher: Sender<MutWrapperUnsafeRepr>
 }
 unsafe impl Send for TimerQueue {}
 
@@ -27,10 +27,14 @@ pub struct Timer<'q,'h> {
     _life: PhantomData<&'q ()>
 }
 
+type TimerHandleUnsafeRepr = usize;
+type TimerHandleResult = Result<TimerHandleUnsafeRepr>;
+
 struct TimerCreationUnsafeRequest {
     due: Duration,
     period: Duration,
-    callback_ref: usize
+    callback_ref: MutWrapperUnsafeRepr,
+    signal: Sender<TimerHandleResult>
 }
 
 // ----------------------------------------- FUNCTIONS --------------------------------------------------
@@ -80,11 +84,11 @@ impl TimerQueue {
     /// Create a new TimerQueue
     pub fn new() -> Self {
         let (dispatcher, receiver) = channel::<TimerCreationUnsafeRequest>();
-        let (result_sender, timer_receiver) = channel();
         thread::spawn(move || {
             for req in receiver {
-                let timer = Self::create_timer(req.due, req.period, req.callback_ref);
-                result_sender.send((req.callback_ref, timer.map(|t| t as usize))).unwrap();
+                let timer = Self::schedule_signal_callback(req.due, req.period, req.callback_ref);
+                let message = timer.map(|t| t as TimerHandleUnsafeRepr);
+                req.signal.send(message).unwrap();
             }
         });
 
@@ -94,7 +98,7 @@ impl TimerQueue {
                 Self::unsafe_call(ctx);
             }
         });
-        TimerQueue { timer_queue: dispatcher, timer_receiver, quick_dispatcher }
+        TimerQueue { timer_queue: dispatcher, quick_dispatcher }
     }
 
     /// Default OS common timer queue
@@ -109,17 +113,10 @@ impl TimerQueue {
         }
     }
 
-    pub fn schedule_timer<'q,'h, F>(&'q self, due: Duration, period: Duration, hints: Option<CallbackHint>, handler: F) -> Result<Timer<'q,'h>>
+    pub fn schedule_timer<'q,'h, F>(&'q self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'q,'h>>
         where F: FnMut() + Send + 'h
     {
-        let callback = Box::new( MutWrapper::new(self, hints, handler));
-        let callback_ref = callback.as_ref() as *const MutWrapper as usize;
-        let unsafe_request = TimerCreationUnsafeRequest { due, period, callback_ref };
-
-        self.timer_queue.send(unsafe_request).unwrap();
-
-        let (id, timer_unsafe) = self.timer_receiver.recv().unwrap();
-        assert_eq!(id, callback_ref);
+        let (timer_unsafe, callback) = self.create_timer(due, period, hint, handler)?;
 
         timer_unsafe.map(|t| Timer::<'q,'h> {
             handle: Some(t as timer_t),
@@ -131,7 +128,7 @@ impl TimerQueue {
     pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, mut handler: F) -> Result<()>
     where F: FnMut() + Send + 'static
     {
-        let journal: WaitEvent<Option<(usize, usize)>> = WaitEvent::new_init(None);
+        let journal: WaitEvent<Option<(TimerHandleUnsafeRepr, MutWrapperUnsafeRepr)>> = WaitEvent::new_init(None);
         let mut journal_write = journal.clone();
         let wrapper = move || {
             handler();
@@ -144,16 +141,9 @@ impl TimerQueue {
             });
         };
 
-        let callback = Box::new( MutWrapper::new(self, hint, wrapper));
-        let callback_ref = callback.as_ref() as *const MutWrapper as usize;
-        let unsafe_request = TimerCreationUnsafeRequest { due, period: Duration::ZERO, callback_ref };
+        let (timer_unsafe, callback) = self.create_timer(due, Duration::ZERO, hint, wrapper)?;
 
-        self.timer_queue.send(unsafe_request).unwrap();
-
-        let (id, timer_unsafe) = self.timer_receiver.recv().unwrap();
-        assert_eq!(id, callback_ref);
-
-        let callback_ptr = Box::into_raw(callback) as usize;
+        let callback_ptr = Box::into_raw(callback) as MutWrapperUnsafeRepr;
 
         match timer_unsafe {
             Ok(handle) => journal_write.set_state(Some((handle, callback_ptr))).map_err(|e| e.into()),
@@ -161,7 +151,24 @@ impl TimerQueue {
         }
     }
 
-    fn create_timer(due: Duration, period: Duration, callback_ref: usize) -> Result<timer_t>
+    fn create_timer<'q,'h, F>(&'q self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F)
+                              -> Result<(TimerHandleResult, Box<MutWrapper<'q,'h>>)>
+        where F: FnMut() + Send + 'h
+    {
+        let callback = Box::new( MutWrapper::<'q,'h>::new(self, hint, handler));
+        let callback_ref = callback.as_ref() as *const MutWrapper as MutWrapperUnsafeRepr;
+        let (signal, timer_receiver) = channel();
+        let unsafe_request = TimerCreationUnsafeRequest { due, period, callback_ref, signal };
+
+        self.timer_queue.send(unsafe_request).unwrap();
+
+        match timer_receiver.recv() {
+            Err(_) => Err(TimerError::SynchronizationBroken),
+            Ok(thm) => Ok((thm, callback))
+        }
+    }
+
+    fn schedule_signal_callback(due: Duration, period: Duration, callback_ref: MutWrapperUnsafeRepr) -> Result<timer_t>
     {
         unsafe {
             let mut sa_mask = mem::zeroed();
@@ -194,7 +201,7 @@ impl TimerQueue {
         }
     }
 
-    fn unsafe_call(ctx: usize) {
+    fn unsafe_call(ctx: MutWrapperUnsafeRepr) {
         let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
         if let Err(e) = wrapper.call() {
             println!("WARNING: Error occurred during timer callback: {e:?}");
@@ -202,7 +209,7 @@ impl TimerQueue {
     }
 
     extern "C" fn timer_callback(_id: c_int, signal: *mut siginfo_t, _uc: *mut c_void){
-        let ctx = unsafe { (*signal).si_value().sival_ptr as usize };
+        let ctx = unsafe { (*signal).si_value().sival_ptr as MutWrapperUnsafeRepr };
 
         let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
         match wrapper.hints {
