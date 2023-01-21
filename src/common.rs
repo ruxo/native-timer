@@ -6,6 +6,7 @@ use crate::{
 
 use platform::{TimerQueue, TimerQueueCore};
 
+#[allow(dead_code)]
 pub(crate) struct MutWrapper<'h> {
     pub hints: Option<CallbackHint>,
     pub mark_deleted: RwLock<bool>,
@@ -24,6 +25,7 @@ impl<'h> MutWrapper<'h> {
             f: Box::new(handler)
         }
     }
+    #[allow(dead_code)]
     pub fn timer_queue(&self) -> TimerQueue {
         TimerQueue::new_with_context(self.main_queue.clone())
     }
