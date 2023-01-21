@@ -18,15 +18,14 @@ pub enum CallbackHint {
 
 #[derive(Debug)]
 pub enum TimerError {
+    /// An error code from OS API call with its meaning.
     OsError(isize, String),
 
-    /// Meaning a sync object gets broken (or poisoned) due to panic!()
+    /// A sync object gets broken (or poisoned) due to panic!()
     SynchronizationBroken
 }
 
 pub type Result<T> = std::result::Result<T, TimerError>;
-
-pub struct TimerHandle<'h>(Timer<'h>);
 
 pub const DEFAULT_ACCEPTABLE_EXECUTION_TIME: Duration = Duration::from_secs(1);
 
@@ -51,15 +50,46 @@ pub const DEFAULT_ACCEPTABLE_EXECUTION_TIME: Duration = Duration::from_secs(1);
 /// drop(t);
 /// assert_eq!(count, 2);
 /// ```
-pub fn schedule_interval<'h, F>(interval: Duration, hint: Option<CallbackHint>, handler: F) -> Result<TimerHandle<'h>> where F: FnMut() + Send + 'h {
-    TimerQueue::default().schedule_timer(interval, interval, hint, handler).map(|t| TimerHandle(t))
+pub fn schedule_interval<'h, F>(interval: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>> where F: FnMut() + Send + 'h {
+    TimerQueue::default().schedule_timer(interval, interval, hint, handler)
 }
 
 /// Schedule an one-shot task.
 ///
 /// The details of parameters are similar to [`schedule_interval`] function.
-pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<TimerHandle<'h>> where F: FnMut() + Send + 'h {
-    TimerQueue::default().schedule_timer(due, Duration::ZERO, hint, handler).map(|t| TimerHandle(t))
+pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>> where F: FnMut() + Send + 'h {
+    TimerQueue::default().schedule_timer(due, Duration::ZERO, hint, handler)
+}
+
+/// Schedule an one-shot background task. Note that, unlike other `schedule_*` functions, this `fire_oneshot` requires a `'static` lifetime closure.
+///
+/// # Arguments
+///
+/// * `due`: Due time to execute the task
+/// * `hint`: Behavior hint of `handler`, which impacts how the task will be scheduled
+/// * `handler`: The task to be called back
+///
+/// returns: Result<(), [`TimerError`]>
+///
+/// # Examples
+///
+/// ```
+/// # use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+/// # use std::thread;
+/// # use std::time::Duration;
+/// use native_timer::fire_oneshot;
+///
+/// let flag = Arc::new(AtomicBool::new(false));
+/// let shared_flag = flag.clone();
+/// fire_oneshot(Duration::from_millis(100), None, move || {
+///     let _ = &shared_flag.store(true, Ordering::SeqCst);
+/// }).unwrap();
+/// thread::sleep(Duration::from_millis(200));
+/// assert!(flag.load(Ordering::SeqCst));
+/// ```
+#[inline]
+pub fn fire_oneshot<F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<()> where F: FnMut() + Send + 'static {
+    TimerQueue::default().fire_oneshot(due, hint, handler)
 }
 
 // ----------------------------------------- IMPLEMENTATIONS ------------------------------------------

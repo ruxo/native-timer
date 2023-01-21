@@ -2,7 +2,7 @@ use std::{
     time::Duration,
     sync::mpsc::{channel, Sender},
     ffi::{c_void, CString},
-    process, ptr, mem, thread, sync
+    ptr, mem, thread, sync
 };
 use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID,
            syscall, SYS_gettid, timer_create, itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_REALTIME};
@@ -98,10 +98,8 @@ impl TimerQueue {
     pub fn default() -> &'static TimerQueue {
         unsafe {
             DEFAULT_QUEUE_ONCE.call_once(|| {
-                println!("Call once!");
                 DEFAULT_QUEUE = Some(Self::new());
             });
-            println!("Return ref!");
             DEFAULT_QUEUE.as_ref().unwrap()
         }
     }
