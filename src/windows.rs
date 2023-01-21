@@ -1,5 +1,5 @@
 use std::{
-    process, sync,
+    sync,
     time::Duration,
     ffi::c_void
 };
@@ -62,15 +62,7 @@ fn change_period(queue: HANDLE, timer: HANDLE, due: Duration, period: Duration) 
 }
 
 fn close_timer(queue: HANDLE, handle: HANDLE, acceptable_execution_time: Duration, callback: &MutWrapper) {
-    match callback.mark_deleted.try_write_for(acceptable_execution_time) {
-        None => {
-            println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
-            process::abort();
-        },
-        Some(mut is_deleted) => {
-            *is_deleted = true;
-        }
-    }
+    callback.mark_delete(acceptable_execution_time);
 
     // ensure no callback during destruction
     change_period(queue, handle, Duration::default(), Duration::default()).unwrap();

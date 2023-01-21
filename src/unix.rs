@@ -57,15 +57,7 @@ fn close_timer(handle: timer_t, callback: &MutWrapper){
         Some(CallbackHint::SlowFunction(d)) => d,
         _ => crate::DEFAULT_ACCEPTABLE_EXECUTION_TIME
     };
-    match callback.mark_deleted.try_write_for(acceptable_execution_time) {
-        None => {
-            println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
-            process::abort();
-        },
-        Some(mut is_deleted) => {
-            *is_deleted = true;
-        }
-    }
+    callback.mark_delete(acceptable_execution_time);
     unsafe {
         if timer_delete(handle) < 0 {
             let e = get_errno();

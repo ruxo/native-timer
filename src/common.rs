@@ -1,4 +1,4 @@
-use std::sync;
+use std::{ time, process, sync };
 use parking_lot::RwLock;
 use crate::{
     Result, platform, CallbackHint
@@ -9,8 +9,8 @@ use platform::{TimerQueue, TimerQueueCore};
 #[allow(dead_code)]
 pub(crate) struct MutWrapper<'h> {
     pub hints: Option<CallbackHint>,
-    pub mark_deleted: RwLock<bool>,
 
+    mark_deleted: RwLock<bool>,
     main_queue: sync::Arc<TimerQueueCore>,
     f: Box<dyn FnMut() + 'h>
 }
@@ -35,5 +35,16 @@ impl<'h> MutWrapper<'h> {
             (self.f)();
         }
         Ok(())
+    }
+    pub(crate) fn mark_delete(&self, acceptable_execution_time: time::Duration) {
+        match self.mark_deleted.try_write_for(acceptable_execution_time) {
+            None => {
+                println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
+                process::abort();
+            },
+            Some(mut is_deleted) => {
+                *is_deleted = true;
+            }
+        }
     }
 }
