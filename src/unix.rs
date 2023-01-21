@@ -5,20 +5,21 @@ use std::{
     ffi::{c_void, CString},
     process, ptr, mem, thread, sync
 };
-use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID, syscall,
-           SYS_gettid, timer_create,
-           itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_REALTIME};
+use libc::{c_int, sigaction, sigevent, sigval, sigemptyset, siginfo_t, size_t, strerror, SIGRTMIN, SIGEV_THREAD_ID,
+           syscall, SYS_gettid, timer_create, itimerspec, timespec, c_long, timer_settime, timer_t, timer_delete, CLOCK_REALTIME};
+use sync_wait_object::WaitEvent;
 use crate::{
     CallbackHint, Result, TimerError,
     common::MutWrapper
 };
 
-// ----------------------------------------- DATA STRUCTURE --------------------------------------------------
+// ------------------------------------- DATA STRUCTURE & MARKERS -------------------------------------
 pub struct TimerQueue {
     timer_queue: Sender<TimerCreationUnsafeRequest>,
     timer_receiver: Receiver<(usize, Result<usize>)>,
     quick_dispatcher: Sender<usize>
 }
+unsafe impl Send for TimerQueue {}
 
 pub struct Timer<'q,'h> {
     handle: Option<timer_t>,
@@ -100,8 +101,10 @@ impl TimerQueue {
     pub fn default() -> &'static TimerQueue {
         unsafe {
             DEFAULT_QUEUE_ONCE.call_once(|| {
+                println!("Call once!");
                 DEFAULT_QUEUE = Some(Self::new());
             });
+            println!("Return ref!");
             DEFAULT_QUEUE.as_ref().unwrap()
         }
     }
@@ -125,8 +128,37 @@ impl TimerQueue {
         })
     }
 
-    pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<()> where F: FnMut() + Send + 'static {
-        Ok(())
+    pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, mut handler: F) -> Result<()>
+    where F: FnMut() + Send + 'static
+    {
+        let journal: WaitEvent<Option<(usize, usize)>> = WaitEvent::new_init(None);
+        let mut journal_write = journal.clone();
+        let wrapper = move || {
+            handler();
+            let (handle, callback_ptr) = journal.wait_reset(None, || None, |v| v.is_some()).unwrap().unwrap();
+
+            // TODO use a common thread to clean up?
+            thread::spawn(move || {
+                let callback = unsafe { Box::from_raw(callback_ptr as *mut MutWrapper) };
+                close_timer(handle as timer_t, &callback);
+            });
+        };
+
+        let callback = Box::new( MutWrapper::new(self, hint, wrapper));
+        let callback_ref = callback.as_ref() as *const MutWrapper as usize;
+        let unsafe_request = TimerCreationUnsafeRequest { due, period: Duration::ZERO, callback_ref };
+
+        self.timer_queue.send(unsafe_request).unwrap();
+
+        let (id, timer_unsafe) = self.timer_receiver.recv().unwrap();
+        assert_eq!(id, callback_ref);
+
+        let callback_ptr = Box::into_raw(callback) as usize;
+
+        match timer_unsafe {
+            Ok(handle) => journal_write.set_state(Some((handle, callback_ptr))).map_err(|e| e.into()),
+            Err(e) => Err(e.into())
+        }
     }
 
     fn create_timer(due: Duration, period: Duration, callback_ref: usize) -> Result<timer_t>
@@ -171,6 +203,7 @@ impl TimerQueue {
 
     extern "C" fn timer_callback(_id: c_int, signal: *mut siginfo_t, _uc: *mut c_void){
         let ctx = unsafe { (*signal).si_value().sival_ptr as usize };
+
         let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
         match wrapper.hints {
             Some(CallbackHint::SlowFunction(_)) => { thread::spawn(move || { Self::unsafe_call(ctx) }); },
@@ -191,5 +224,45 @@ impl<'q,'h> Drop for Timer<'q,'h> {
         if let Some(handle) = self.handle.take() {
             close_timer(handle, &self.callback);
         }
+    }
+}
+#[cfg(test)]
+mod test {
+    use std::{
+        thread::sleep,
+        time::Duration
+    };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use super::TimerQueue;
+
+    #[test]
+    fn test_singleshot(){
+        let my_queue = TimerQueue::new();
+        let mut called = 0;
+        let timer = my_queue.schedule_timer(Duration::from_millis(400), Duration::ZERO, None, || called += 1).unwrap();
+        sleep(Duration::from_secs(1));
+        drop(timer);
+        assert_eq!(called, 1);
+    }
+
+    #[test]
+    fn test_period(){
+        let my_queue = TimerQueue::new();
+        let mut called = 0;
+        let duration = Duration::from_millis(300);
+        let t = my_queue.schedule_timer(duration, duration, None, || called += 1).unwrap();
+        sleep(Duration::from_secs(1));
+        drop(t);
+        assert_eq!(called, 3);
+    }
+
+    #[test]
+    fn test_oneshot() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let shared_flag = flag.clone();
+        TimerQueue::default().fire_oneshot(Duration::from_millis(100), None, move || shared_flag.store(true, Ordering::SeqCst)).unwrap();
+        sleep(Duration::from_millis(200));
+        assert!(flag.load(Ordering::SeqCst));
     }
 }

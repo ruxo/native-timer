@@ -125,7 +125,6 @@ impl TimerQueue {
             std::thread::spawn(move || {
                 let callback = unsafe { Box::from_raw(callback_ptr as *mut MutWrapper) };
                 close_timer(queue_handle, handle, acceptable_execution_time, &callback);
-                drop(callback);
             });
         };
         let (timer_handle, callback) = self.create_timer(due, Duration::ZERO, hint, wrapper)?;
