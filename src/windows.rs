@@ -15,25 +15,10 @@ use super::TimerError;
 // ------------------ DATA STRUCTURE -------------------------------
 pub struct TimerQueueCore(HANDLE);
 
-/// Wrapper of Windows Timer Queue API
-///
-/// Windows OS provides a default Timer Queue which can be retrieved by using [`TimerQueue::default`]. The default queue has `'static` lifetime, and can
-/// be assigned as a constant.
-///
-/// ```rust
-/// # use std::thread::sleep;
-/// # use std::time::Duration;
-/// # use native_timer::TimerQueue;
-/// let mut count = 0;
-/// let default_queue = TimerQueue::default();
-/// let t = default_queue.schedule_timer(Duration::from_millis(100), Duration::default(), None, || count += 1);
-/// sleep(Duration::from_millis(200));
-/// drop(t);
-/// assert_eq!(count, 1);
-/// ```
+#[doc = include_str!("../docs/TimerQueue.md")]
 pub struct TimerQueue(sync::Arc<TimerQueueCore>);
 
-/// Windows Timer
+#[doc = include_str!("../docs/Timer.md")]
 pub struct Timer<'h> {
     queue: sync::Arc<TimerQueueCore>,
     handle: HANDLE,
@@ -104,7 +89,7 @@ impl TimerQueue {
         TimerQueue(sync::Arc::new(TimerQueueCore(core)))
     }
 
-    /// Schedule a timer, either a one-shot timer, or a periodical timer.
+    #[doc = include_str!("../docs/TimerQueue_schedule_timer.md")]
     pub fn schedule_timer<'h, F>(&self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>>
         where F: FnMut() + Send + 'h
     {
@@ -113,6 +98,7 @@ impl TimerQueue {
         Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback, acceptable_execution_time })
     }
 
+    #[doc = include_str!("../docs/TimerQueue_fire_oneshot.md")]
     pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, mut handler: F) -> Result<()> where F: FnMut() + Send {
         let journal: WaitEvent<Option<(HANDLE, usize)>> = WaitEvent::new_init(None);
         let mut journal_write = journal.clone();
@@ -184,6 +170,7 @@ impl Drop for TimerQueueCore {
 }
 
 impl<'h> Timer<'h> {
+    /// *(Windows only)* Reset the timer with a new due time and a new period.
     pub fn change_period(&self, due: Duration, period: Duration) -> Result<()> {
         change_period(self.queue.0, self.handle, due, period)
     }
@@ -201,45 +188,5 @@ impl<'h> Drop for Timer<'h> {
 impl From<WIN32_ERROR> for TimerError {
     fn from(value: WIN32_ERROR) -> Self {
         TimerError::OsError(value.0 as isize, value.to_hresult().message().to_string())
-    }
-}
-
-// ------------------ TESTS -------------------------------
-#[cfg(test)]
-mod test {
-    use std::{
-        thread::sleep,
-        time::Duration
-    };
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use super::TimerQueue;
-
-    #[test]
-    fn test_singleshot(){
-        let my_queue = TimerQueue::new();
-        let mut called = 0;
-        let timer = my_queue.schedule_timer(Duration::from_millis(400), Duration::ZERO, None, || called += 1).unwrap();
-        sleep(Duration::from_secs(1));
-        drop(timer);
-        assert_eq!(called, 1);
-    }
-
-    #[test]
-    fn test_period(){
-        let my_queue = TimerQueue::new();
-        let mut called = 0;
-        let duration = Duration::from_millis(300);
-        let t = my_queue.schedule_timer(duration, duration, None, || called += 1).unwrap();
-        sleep(Duration::from_secs(1));
-        drop(t);
-        assert_eq!(called, 3);
-    }
-
-    #[test]
-    fn test_oneshot() {
-        let flag = AtomicBool::new(false);
-        TimerQueue::default().fire_oneshot(Duration::from_millis(100), None, || flag.store(true, Ordering::SeqCst)).unwrap();
-        sleep(Duration::from_millis(200));
-        assert!(flag.load(Ordering::SeqCst));
     }
 }

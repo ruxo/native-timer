@@ -32,7 +32,3 @@ features = [
 [[example]]
 name = "simple"
 path = "src/examples/simple.rs"
-
-[[example]]
-name = "t4est"
-path = "src/examples/test_onshot.rs"

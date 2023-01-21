@@ -18,8 +18,10 @@ pub struct TimerQueueCore {
     quick_dispatcher: Sender<MutWrapperUnsafeRepr>
 }
 
+#[doc = include_str!("../docs/TimerQueue.md")]
 pub struct TimerQueue(sync::Arc<TimerQueueCore>);
 
+#[doc = include_str!("../docs/Timer.md")]
 pub struct Timer<'h> {
     handle: Option<timer_t>,
     callback: Box<MutWrapper<'h>>
@@ -104,6 +106,7 @@ impl TimerQueue {
         }
     }
 
+    #[doc = include_str!("../docs/TimerQueue_schedule_timer.md")]
     pub fn schedule_timer<'h, F>(&self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>>
         where F: FnMut() + Send + 'h
     {
@@ -115,6 +118,7 @@ impl TimerQueue {
         })
     }
 
+    #[doc = include_str!("../docs/TimerQueue_fire_oneshot.md")]
     pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, mut handler: F) -> Result<()>
     where F: FnMut() + Send + 'static
     {
@@ -230,45 +234,5 @@ impl<'h> Drop for Timer<'h> {
         if let Some(handle) = self.handle.take() {
             close_timer(handle, &self.callback);
         }
-    }
-}
-#[cfg(test)]
-mod test {
-    use std::{
-        thread::sleep,
-        time::Duration
-    };
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use super::TimerQueue;
-
-    #[test]
-    fn test_singleshot(){
-        let my_queue = TimerQueue::new();
-        let mut called = 0;
-        let timer = my_queue.schedule_timer(Duration::from_millis(400), Duration::ZERO, None, || called += 1).unwrap();
-        sleep(Duration::from_secs(1));
-        drop(timer);
-        assert_eq!(called, 1);
-    }
-
-    #[test]
-    fn test_period(){
-        let my_queue = TimerQueue::new();
-        let mut called = 0;
-        let duration = Duration::from_millis(300);
-        let t = my_queue.schedule_timer(duration, duration, None, || called += 1).unwrap();
-        sleep(Duration::from_secs(1));
-        drop(t);
-        assert_eq!(called, 3);
-    }
-
-    #[test]
-    fn test_oneshot() {
-        let flag = Arc::new(AtomicBool::new(false));
-        let shared_flag = flag.clone();
-        TimerQueue::default().fire_oneshot(Duration::from_millis(100), None, move || shared_flag.store(true, Ordering::SeqCst)).unwrap();
-        sleep(Duration::from_millis(200));
-        assert!(flag.load(Ordering::SeqCst));
     }
 }

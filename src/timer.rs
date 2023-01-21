@@ -32,7 +32,7 @@ pub const DEFAULT_ACCEPTABLE_EXECUTION_TIME: Duration = Duration::from_secs(1);
 //----------------------------- FUNCTIONS --------------------------------------
 
 
-/// Schedule an interval task.
+/// Schedule an interval task on the default [`TimerQueue`].
 ///
 /// The function `interval` cannot be negative (it will be converted to `u32`). [`CallbackHint`] gives the OS scheduler some hint about the callback
 /// behavior. For example, if the handler takes long time to finish, the caller should hint with [`CallbackHint::SlowFunction`]. If no hint is specified,
@@ -54,14 +54,15 @@ pub fn schedule_interval<'h, F>(interval: Duration, hint: Option<CallbackHint>, 
     TimerQueue::default().schedule_timer(interval, interval, hint, handler)
 }
 
-/// Schedule an one-shot task.
+/// Schedule an one-shot task on the default [`TimerQueue`].
 ///
 /// The details of parameters are similar to [`schedule_interval`] function.
 pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>> where F: FnMut() + Send + 'h {
     TimerQueue::default().schedule_timer(due, Duration::ZERO, hint, handler)
 }
 
-/// Schedule an one-shot background task. Note that, unlike other `schedule_*` functions, this `fire_oneshot` requires a `'static` lifetime closure.
+/// Schedule an one-shot background task on the default [`TimerQueue`]. Note that, unlike other `schedule_*` functions, this `fire_oneshot`
+/// requires a `'static` lifetime closure.
 ///
 /// # Arguments
 ///

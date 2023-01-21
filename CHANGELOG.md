@@ -1,6 +1,11 @@
 ### 0.4.0
 - Use `parking_lot` lib
 - Introduce `fire_oneshot`, fire-and-forget about lifetime management!
+  - Introduce `TimerQueueCore` to allow `'static` lifetime reference of `TimerQueue`.
+  - Meaning, `'q` lifetime is no longer a dependency for `schedule_*`, and `fire_oneshot` functions.
+- Fix bugs of timer logic in Unix platform's code.
+- Remove `TimerHandle`, just use `Timer`
+- Remove duplicated code
 
 ### 0.3.3
 - Split wait object code into `sync-wait-object` library.
