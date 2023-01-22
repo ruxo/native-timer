@@ -55,12 +55,13 @@ fn to_result(ret: c_int) -> Result<()> {
 }
 
 fn close_timer(handle: timer_t, callback: &MutWrapper){
-    let acceptable_execution_time = match callback.hints {
+    let acceptable_execution_time = match callback.hint {
         Some(CallbackHint::SlowFunction(d)) => d,
         _ => crate::DEFAULT_ACCEPTABLE_EXECUTION_TIME
     };
     callback.mark_delete(acceptable_execution_time);
     unsafe {
+        // TODO sometimes the callback still happens after the deletion! Need to find better way to clean up.
         if timer_delete(handle) < 0 {
             let e = get_errno();
             println!("WARNING: an error occurred during timer destruction. Memory might leak. Error = {e:?}");
@@ -110,7 +111,8 @@ impl TimerQueue {
     pub fn schedule_timer<'h, F>(&self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>>
         where F: FnMut() + Send + 'h
     {
-        let (timer_unsafe, callback) = self.create_timer(due, period, hint, handler)?;
+        let callback = Box::new(MutWrapper::new(self.0.clone(), hint, handler));
+        let timer_unsafe = self.create_timer(due, period, &callback)?;
 
         timer_unsafe.map(|t| Timer::<'h> {
             handle: Some(t as timer_t),
@@ -119,8 +121,8 @@ impl TimerQueue {
     }
 
     #[doc = include_str!("../docs/TimerQueue_fire_oneshot.md")]
-    pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, mut handler: F) -> Result<()>
-    where F: FnMut() + Send + 'static
+    pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<()>
+    where F: FnOnce() + Send + 'static
     {
         let journal: WaitEvent<Option<(TimerHandleUnsafeRepr, MutWrapperUnsafeRepr)>> = WaitEvent::new_init(None);
         let mut journal_write = journal.clone();
@@ -135,7 +137,8 @@ impl TimerQueue {
             });
         };
 
-        let (timer_unsafe, callback) = self.create_timer(due, Duration::ZERO, hint, wrapper)?;
+        let callback = Box::new(MutWrapper::new_once(self.0.clone(), hint, wrapper));
+        let timer_unsafe = self.create_timer(due, Duration::ZERO, &callback)?;
 
         let callback_ptr = Box::into_raw(callback) as MutWrapperUnsafeRepr;
 
@@ -154,11 +157,7 @@ impl TimerQueue {
         self.0.quick_dispatcher.send(ctx).map_err(|_| TimerError::SynchronizationBroken)
     }
 
-    fn create_timer<'h, F>(&self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F)
-                              -> Result<(TimerHandleResult, Box<MutWrapper<'h>>)>
-        where F: FnMut() + Send + 'h
-    {
-        let callback = Box::new( MutWrapper::<'h>::new(self.0.clone(), hint, handler));
+    fn create_timer<'h>(&self, due: Duration, period: Duration, callback: &Box<MutWrapper<'h>>) -> Result<TimerHandleResult> {
         let callback_ref = callback.as_ref() as *const MutWrapper as MutWrapperUnsafeRepr;
         let (signal, timer_receiver) = channel();
         let unsafe_request = TimerCreationUnsafeRequest { due, period, callback_ref, signal };
@@ -167,7 +166,7 @@ impl TimerQueue {
 
         match timer_receiver.recv() {
             Err(_) => Err(TimerError::SynchronizationBroken),
-            Ok(thm) => Ok((thm, callback))
+            Ok(thm) => Ok(thm)
         }
     }
 
@@ -215,8 +214,8 @@ impl TimerQueue {
         let ctx = unsafe { (*signal).si_value().sival_ptr as MutWrapperUnsafeRepr };
 
         let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
-        match wrapper.hints {
-            Some(CallbackHint::SlowFunction(_)) => { thread::spawn(move || { Self::unsafe_call(ctx) }); },
+        match wrapper.hint {
+            Some(CallbackHint::SlowFunction(_)) => { thread::spawn(move || Self::unsafe_call(ctx)); },
             _ => wrapper.timer_queue().dispatch_quick_call(ctx).unwrap()
         }
     }

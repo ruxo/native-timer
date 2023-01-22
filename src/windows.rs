@@ -94,12 +94,14 @@ impl TimerQueue {
         where F: FnMut() + Send + 'h
     {
         let acceptable_execution_time = get_acceptable_execution_time(hint);
-        let (timer_handle, callback) = self.create_timer(due, period, hint, handler)?;
+        let period = period.as_millis() as u32;
+        let callback = Box::new(MutWrapper::new(self.0.clone(), hint, handler));
+        let timer_handle = self.create_timer(due, period, hint, &callback)?;
         Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback, acceptable_execution_time })
     }
 
     #[doc = include_str!("../docs/TimerQueue_fire_oneshot.md")]
-    pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, mut handler: F) -> Result<()> where F: FnMut() + Send {
+    pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<()> where F: FnOnce() + Send + 'static {
         let journal: WaitEvent<Option<(HANDLE, usize)>> = WaitEvent::new_init(None);
         let mut journal_write = journal.clone();
         let queue_handle = self.0.0;
@@ -117,7 +119,8 @@ impl TimerQueue {
                 close_timer(queue_handle, handle, acceptable_execution_time, &callback);
             });
         };
-        let (timer_handle, callback) = self.create_timer(due, Duration::ZERO, hint, wrapper)?;
+        let callback = Box::new(MutWrapper::new_once(self.0.clone(), hint, wrapper));
+        let timer_handle = self.create_timer(due, 0, hint, &callback)?;
         let callback_ptr = Box::into_raw(callback) as usize;
         journal_write.set_state(Some((timer_handle, callback_ptr))).map_err(|e| e.into())
     }
@@ -127,10 +130,8 @@ impl TimerQueue {
         TimerQueue(context)
     }
 
-    fn create_timer<'h, F>(&self, due: Duration, period: Duration, hint: Option<CallbackHint>, handler: F) -> Result<(HANDLE, Box<MutWrapper<'h>>)>
-        where F: FnMut() + Send + 'h
+    fn create_timer(&self, due: Duration, period: u32, hint: Option<CallbackHint>, callback: &Box<MutWrapper>) -> Result<HANDLE>
     {
-        let period = period.as_millis() as u32;
         let option = hint.map(|o| match o {
             CallbackHint::QuickFunction => WT_EXECUTEINPERSISTENTTHREAD,
             CallbackHint::SlowFunction(_) => WT_EXECUTELONGFUNCTION
@@ -138,7 +139,6 @@ impl TimerQueue {
         let option = if period == 0 { option | WT_EXECUTEONLYONCE } else { option };
 
         let mut timer_handle = HANDLE::default();
-        let callback = Box::new(MutWrapper::new(self.0.clone(), hint, handler));
         let callback_ref = callback.as_ref() as *const MutWrapper as *const c_void;
 
         let create_timer_queue_timer_result = unsafe {
@@ -146,7 +146,7 @@ impl TimerQueue {
                                   due.as_millis() as u32, period, option).as_bool()
         };
         if create_timer_queue_timer_result {
-            Ok((timer_handle, callback))
+            Ok(timer_handle)
         } else {
             Err(get_last_error())
         }

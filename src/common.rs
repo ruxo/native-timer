@@ -6,23 +6,38 @@ use crate::{
 
 use platform::{TimerQueue, TimerQueueCore};
 
+// ------------------------------------- DATA STRUCTURES & MARKERS ------------------------------------
+enum FType<'h> {
+    None,
+    Mut(Box<dyn FnMut() + 'h>),
+    Once(Box<dyn FnOnce() + 'h>)
+}
+
 #[allow(dead_code)]
 pub(crate) struct MutWrapper<'h> {
-    pub hints: Option<CallbackHint>,
+    pub hint: Option<CallbackHint>,
 
     mark_deleted: RwLock<bool>,
     main_queue: sync::Arc<TimerQueueCore>,
-    f: Box<dyn FnMut() + 'h>
+    f: FType<'h>
 }
 
-// ------------------------------ IMPLEMENTATIONS ------------------------------
+// --------------------------------------- IMPLEMENTATIONS --------------------------------------------
 impl<'h> MutWrapper<'h> {
-    pub fn new<F>(main_queue: sync::Arc<TimerQueueCore>, hints: Option<CallbackHint>, handler: F) -> Self where F: FnMut() + Send + 'h {
+    pub fn new<F>(main_queue: sync::Arc<TimerQueueCore>, hint: Option<CallbackHint>, handler: F) -> Self where F: FnMut() + Send + 'h {
         MutWrapper::<'h> {
-            hints,
+            hint,
             mark_deleted: RwLock::new(false),
             main_queue,
-            f: Box::new(handler)
+            f: FType::Mut(Box::new(handler))
+        }
+    }
+    pub fn new_once<F>(main_queue: sync::Arc<TimerQueueCore>, hints: Option<CallbackHint>, handler: F) -> Self where F: FnOnce() + Send + 'h {
+        MutWrapper::<'h> {
+            hint: hints,
+            mark_deleted: RwLock::new(false),
+            main_queue,
+            f: FType::Once(Box::new(handler))
         }
     }
     #[allow(dead_code)]
@@ -32,7 +47,15 @@ impl<'h> MutWrapper<'h> {
     pub fn call(&mut self) -> Result<()> {
         let is_deleted = self.mark_deleted.read();
         if !*is_deleted {
-            (self.f)();
+            match &mut self.f {
+                FType::Once(_) => {
+                    if let FType::Once(f) = std::mem::replace(&mut self.f, FType::None) {
+                        f();
+                    }
+                }
+                FType::Mut(ref mut f) => { (*f)(); }
+                FType::None => ()
+            }
         }
         Ok(())
     }
