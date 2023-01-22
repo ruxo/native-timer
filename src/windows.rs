@@ -100,6 +100,14 @@ impl TimerQueue {
         Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback, acceptable_execution_time })
     }
 
+    #[doc = include_str!("../docs/TimerQueue_schedule_oneshot.md")]
+    pub fn schedule_oneshot<'h, F>(&self, due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>> where F: FnOnce() + Send + 'h {
+        let acceptable_execution_time = get_acceptable_execution_time(hint);
+        let callback = Box::new(MutWrapper::new_once(self.0.clone(), hint, handler));
+        let timer_handle = self.create_timer(due, 0, hint, &callback)?;
+        Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback, acceptable_execution_time })
+    }
+
     #[doc = include_str!("../docs/TimerQueue_fire_oneshot.md")]
     pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<()> where F: FnOnce() + Send + 'static {
         let journal: WaitEvent<Option<(HANDLE, usize)>> = WaitEvent::new_init(None);

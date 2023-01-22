@@ -57,8 +57,8 @@ pub fn schedule_interval<'h, F>(interval: Duration, hint: Option<CallbackHint>, 
 /// Schedule an one-shot task on the default [`TimerQueue`].
 ///
 /// The details of parameters are similar to [`schedule_interval`] function.
-pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>> where F: FnMut() + Send + 'h {
-    TimerQueue::default().schedule_timer(due, Duration::ZERO, hint, handler)
+pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>> where F: FnOnce() + Send + 'h {
+    TimerQueue::default().schedule_oneshot(due, hint, handler)
 }
 
 /// Schedule an one-shot background task on the default [`TimerQueue`]. Note that, unlike other `schedule_*` functions, this `fire_oneshot`

@@ -120,6 +120,19 @@ impl TimerQueue {
         })
     }
 
+    #[doc = include_str!("../docs/TimerQueue_schedule_oneshot.md")]
+    pub fn schedule_oneshot<'h, F>(&self, due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<Timer<'h>>
+        where F: FnOnce() + Send + 'h
+    {
+        let callback = Box::new(MutWrapper::new_once(self.0.clone(), hint, handler));
+        let timer_unsafe = self.create_timer(due, Duration::ZERO, &callback)?;
+
+        timer_unsafe.map(|t| Timer::<'h> {
+            handle: Some(t as timer_t),
+            callback
+        })
+    }
+
     #[doc = include_str!("../docs/TimerQueue_fire_oneshot.md")]
     pub fn fire_oneshot<F>(&self, due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<()>
     where F: FnOnce() + Send + 'static

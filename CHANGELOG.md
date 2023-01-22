@@ -1,3 +1,7 @@
+### 0.5.0
+- Use `FnOnce` with `fire_oneshot`, fix an example.
+- Add `TimerQueue::schedule_oneshot`
+
 ### 0.4.0
 - Use `parking_lot` lib
 - Introduce `fire_oneshot`, fire-and-forget about lifetime management!
