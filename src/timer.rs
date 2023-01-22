@@ -3,7 +3,7 @@ use std::{
     time::Duration
 };
 use sync_wait_object::WaitObjectError;
-use crate::{ TimerQueue, Timer };
+use crate::{TimerQueue, Timer};
 
 /// Scheduler hint about the callback function.
 #[derive(Copy, Clone, Debug)]

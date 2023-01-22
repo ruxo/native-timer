@@ -1,6 +1,5 @@
-use std::{ time, process, sync };
-use parking_lot::lock_api::RwLockWriteGuard;
-use parking_lot::{RawRwLock, RwLock};
+use std::{ sync, sync::atomic, time::Duration, sync::atomic::Ordering };
+use sync_wait_object::{WaitEvent};
 use crate::{
     Result, platform, CallbackHint
 };
@@ -13,18 +12,66 @@ enum FType<'h> {
     Mut(Box<dyn FnMut() + 'h>),
     Once(Box<dyn FnOnce() + 'h>)
 }
+unsafe impl<'h> Send for FType<'h> {}
+unsafe impl<'h> Sync for FType<'h> {}
 
 #[allow(dead_code)]
 pub(crate) struct MutWrapper<'h> {
     pub hint: Option<CallbackHint>,
 
-    mark_deleted: RwLock<bool>,
+    idle: IdleWaitType,
+    mark_deleted: atomic::AtomicBool,
     main_queue: sync::Arc<TimerQueueCore>,
     f: FType<'h>
 }
 
 pub(crate) trait MutCallable {
     fn call(&mut self) -> Result<()>;
+    fn wait_idle(&self, acceptable_execution_time: Duration) -> Result<()>;
+}
+
+pub(crate) type MutWrapperUnsafeRepr = usize;
+
+type IdleWaitType = WaitEvent<i32>;
+struct CriticalSection<'a>(&'a mut IdleWaitType);
+
+// ------------------------------------------ FUNCTIONS -----------------------------------------------
+#[cfg(tracker)]
+pub(crate) use with_tracker::*;
+
+#[cfg(tracker)]
+mod with_tracker {
+    use std::{collections::HashSet, sync};
+    use parking_lot::RwLock;
+    use super::MutWrapperUnsafeRepr;
+
+    static TRACKER_INIT: sync::Once = sync::Once::new();
+    static mut TRACKER: Option<RwLock<HashSet<MutWrapperUnsafeRepr>>> = None;
+
+    pub(crate) fn is_mutwrapper_unsafe_repr_valid(key: MutWrapperUnsafeRepr) -> bool { tracker().read().get(&key).is_some() }
+    pub(crate) fn save_mutwrapper_unsafe_repr(key: MutWrapperUnsafeRepr) { tracker().write().insert(key); }
+    pub(crate) fn remove_mutwrapper_unsafe_repr(key: MutWrapperUnsafeRepr) { tracker().write().remove(&key); }
+
+    fn tracker() -> &'static RwLock<HashSet<MutWrapperUnsafeRepr>> {
+        unsafe {
+            TRACKER_INIT.call_once(|| {
+                TRACKER = Some(RwLock::new(HashSet::new()));
+            });
+            TRACKER.as_ref().unwrap()
+        }
+    }
+}
+
+#[cfg(not(tracker))]
+pub(crate) use without_tracker::*;
+
+#[cfg(not(tracker))]
+mod without_tracker {
+    use super::MutWrapperUnsafeRepr;
+
+    pub(crate) fn is_mutwrapper_unsafe_repr_valid(_key: MutWrapperUnsafeRepr) -> bool { true }
+    pub(crate) fn save_mutwrapper_unsafe_repr(_key: MutWrapperUnsafeRepr) { }
+    pub(crate) fn remove_mutwrapper_unsafe_repr(_key: MutWrapperUnsafeRepr) { }
 }
 
 // --------------------------------------- IMPLEMENTATIONS --------------------------------------------
@@ -32,7 +79,8 @@ impl<'h> MutWrapper<'h> {
     pub fn new<F>(main_queue: sync::Arc<TimerQueueCore>, hint: Option<CallbackHint>, handler: F) -> Self where F: FnMut() + Send + 'h {
         MutWrapper::<'h> {
             hint,
-            mark_deleted: RwLock::new(false),
+            idle: IdleWaitType::new_init(0),
+            mark_deleted: atomic::AtomicBool::new(false),
             main_queue,
             f: FType::Mut(Box::new(handler))
         }
@@ -40,7 +88,8 @@ impl<'h> MutWrapper<'h> {
     pub fn new_once<F>(main_queue: sync::Arc<TimerQueueCore>, hints: Option<CallbackHint>, handler: F) -> Self where F: FnOnce() + Send + 'h {
         MutWrapper::<'h> {
             hint: hints,
-            mark_deleted: RwLock::new(false),
+            idle: IdleWaitType::new_init(0),
+            mark_deleted: atomic::AtomicBool::new(false),
             main_queue,
             f: FType::Once(Box::new(handler))
         }
@@ -49,24 +98,16 @@ impl<'h> MutWrapper<'h> {
     pub fn timer_queue(&self) -> TimerQueue {
         TimerQueue::new_with_context(self.main_queue.clone())
     }
-    pub(crate) fn mark_delete(&self, acceptable_execution_time: time::Duration) -> RwLockWriteGuard<'_, RawRwLock, bool> {
-        match self.mark_deleted.try_write_for(acceptable_execution_time) {
-            None => {
-                println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
-                process::abort();
-            },
-            Some(mut is_deleted) => {
-                *is_deleted = true;
-                is_deleted
-            }
-        }
+    pub(crate) fn mark_delete(&self) {
+        self.mark_deleted.store(true, Ordering::SeqCst);
     }
 }
 
 impl<'h> MutCallable for MutWrapper<'h> {
     fn call(&mut self) -> Result<()> {
-        let is_deleted = self.mark_deleted.read();
-        if !*is_deleted {
+        let section = CriticalSection::start(&mut self.idle);
+        let is_deleted = self.mark_deleted.load(Ordering::SeqCst);
+        if !is_deleted {
             match &mut self.f {
                 FType::Once(_) => {
                     if let FType::Once(f) = std::mem::replace(&mut self.f, FType::None) {
@@ -77,10 +118,31 @@ impl<'h> MutCallable for MutWrapper<'h> {
                 FType::None => ()
             }
         }
-        else {
-            let r = self as *const MutWrapper as usize;
-            println!("WARNING: Call back to a deleted instance {r}");
-        }
+        drop(section);
         Ok(())
+    }
+
+    fn wait_idle(&self, acceptable_execution_time: Duration) -> Result<()> {
+        match self.idle.wait(Some(acceptable_execution_time), |v| *v == 0) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.into())
+        }
+    }
+}
+
+impl<'a> CriticalSection<'a> {
+    fn start(idle: &'a mut IdleWaitType) -> Self {
+        idle.set_state_func(|v| *v + 1).unwrap();
+        Self(idle)
+    }
+}
+
+impl<'a> Drop for CriticalSection<'a> {
+    fn drop(&mut self) {
+        self.0.set_state_func(|v|{
+            let new_value = *v - 1;
+            assert!(new_value >= 0);
+            new_value
+        }).unwrap();
     }
 }

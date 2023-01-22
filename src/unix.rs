@@ -11,6 +11,7 @@ use crate::{
     CallbackHint, Result, TimerError,
     common::MutWrapper
 };
+use crate::common::MutCallable;
 
 // ------------------------------------- DATA STRUCTURE & MARKERS -------------------------------------
 pub struct TimerQueueCore {
@@ -59,9 +60,10 @@ fn close_timer(handle: timer_t, callback: &MutWrapper) -> Result<()> {
         Some(CallbackHint::SlowFunction(d)) => d,
         _ => crate::DEFAULT_ACCEPTABLE_EXECUTION_TIME
     };
-    let _lock = callback.mark_delete(acceptable_execution_time);
+    callback.mark_delete();
 
     change_period(handle, Duration::ZERO, Duration::ZERO)?;
+    callback.wait_idle(acceptable_execution_time)?;
     unsafe { to_result(timer_delete(handle)) }
 }
 

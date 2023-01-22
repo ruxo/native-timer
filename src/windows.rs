@@ -9,7 +9,7 @@ use windows::Win32::{
     System::Threading::*,
 };
 use super::timer::{CallbackHint, Result, DEFAULT_ACCEPTABLE_EXECUTION_TIME};
-use crate::common::{MutWrapper, MutCallable};
+use crate::common::*;
 use super::TimerError;
 
 // ------------------ DATA STRUCTURE -------------------------------
@@ -20,12 +20,11 @@ pub struct TimerQueue(sync::Arc<TimerQueueCore>);
 pub struct Timer<'h> {
     queue: sync::Arc<TimerQueueCore>,
     handle: HANDLE,
-    callback: TimerCore<'h>,
+    callback: Box<MutWrapper<'h>>,
     acceptable_execution_time: Duration
 }
 
 pub(crate) struct TimerQueueCore(HANDLE);
-pub(crate) struct TimerCore<'h>(Box<MutWrapper<'h>>);
 
 // ----------------------------------------- FUNCTIONS ------------------------------------------------
 #[inline]
@@ -48,11 +47,15 @@ fn change_period(queue: HANDLE, timer: HANDLE, due: Duration, period: Duration) 
 }
 
 fn close_timer(queue: HANDLE, handle: HANDLE, acceptable_execution_time: Duration, callback: &MutWrapper) -> Result<()> {
-    let _lock = callback.mark_delete(acceptable_execution_time);
+    callback.mark_delete();
+
+    let key = callback as *const MutWrapper as MutWrapperUnsafeRepr;
+    remove_mutwrapper_unsafe_repr(key);
 
     // ensure no callback during destruction
     change_period(queue, handle, Duration::default(), Duration::default())?;
 
+    callback.wait_idle(acceptable_execution_time)?;
     let result = unsafe { DeleteTimerQueueTimer(queue, handle, None).as_bool() };
 
     if !result {
@@ -99,7 +102,7 @@ impl TimerQueue {
         let period = period.as_millis() as u32;
         let callback = Box::new(MutWrapper::new(self.0.clone(), hint, handler));
         let timer_handle = self.create_timer(due, period, hint, &callback)?;
-        Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback: TimerCore::<'h>(callback), acceptable_execution_time })
+        Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback, acceptable_execution_time })
     }
 
     #[doc = include_str!("../docs/TimerQueue_schedule_oneshot.md")]
@@ -107,7 +110,7 @@ impl TimerQueue {
         let acceptable_execution_time = get_acceptable_execution_time(hint);
         let callback = Box::new(MutWrapper::new_once(self.0.clone(), hint, handler));
         let timer_handle = self.create_timer(due, 0, hint, &callback)?;
-        Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback: TimerCore::<'h>(callback), acceptable_execution_time })
+        Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback, acceptable_execution_time })
     }
 
     #[doc = include_str!("../docs/TimerQueue_fire_oneshot.md")]
@@ -151,6 +154,8 @@ impl TimerQueue {
         let mut timer_handle = HANDLE::default();
         let callback_ref = callback.as_ref() as *const MutWrapper as *const c_void;
 
+        save_mutwrapper_unsafe_repr(callback_ref as MutWrapperUnsafeRepr);
+
         let create_timer_queue_timer_result = unsafe {
             CreateTimerQueueTimer(&mut timer_handle, self.0.0, Some(timer_callback), Some(callback_ref),
                                   due.as_millis() as u32, period, option).as_bool()
@@ -164,9 +169,12 @@ impl TimerQueue {
 }
 
 extern "system" fn timer_callback(ctx: *mut c_void, _: BOOLEAN) {
-    let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
-    if let Err(e) = wrapper.call() {
-        println!("WARNING: Error occurred during timer callback: {e:?}");
+    let valid = is_mutwrapper_unsafe_repr_valid(ctx as MutWrapperUnsafeRepr);
+    if valid {
+        let wrapper = unsafe { &mut *(ctx as *mut MutWrapper) };
+        if let Err(e) = wrapper.call() {
+            println!("WARNING: Error occurred during timer callback: {e:?}");
+        }
     }
 }
 
@@ -190,7 +198,7 @@ impl<'h> Timer<'h> {
         if !self.handle.is_invalid() {
             let handle = self.handle;
             self.handle = HANDLE::default();
-            close_timer(self.queue.0, handle, self.acceptable_execution_time, &self.callback.0)
+            close_timer(self.queue.0, handle, self.acceptable_execution_time, &self.callback)
         } else {
             Ok(())
         }
