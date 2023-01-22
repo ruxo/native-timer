@@ -9,12 +9,10 @@ use windows::Win32::{
     System::Threading::*,
 };
 use super::timer::{CallbackHint, Result, DEFAULT_ACCEPTABLE_EXECUTION_TIME};
-use crate::common::MutWrapper;
+use crate::common::{MutWrapper, MutCallable};
 use super::TimerError;
 
 // ------------------ DATA STRUCTURE -------------------------------
-pub struct TimerQueueCore(HANDLE);
-
 #[doc = include_str!("../docs/TimerQueue.md")]
 pub struct TimerQueue(sync::Arc<TimerQueueCore>);
 
@@ -22,9 +20,12 @@ pub struct TimerQueue(sync::Arc<TimerQueueCore>);
 pub struct Timer<'h> {
     queue: sync::Arc<TimerQueueCore>,
     handle: HANDLE,
-    callback: Box<MutWrapper<'h>>,
+    callback: TimerCore<'h>,
     acceptable_execution_time: Duration
 }
+
+pub(crate) struct TimerQueueCore(HANDLE);
+pub(crate) struct TimerCore<'h>(Box<MutWrapper<'h>>);
 
 // ----------------------------------------- FUNCTIONS ------------------------------------------------
 #[inline]
@@ -98,7 +99,7 @@ impl TimerQueue {
         let period = period.as_millis() as u32;
         let callback = Box::new(MutWrapper::new(self.0.clone(), hint, handler));
         let timer_handle = self.create_timer(due, period, hint, &callback)?;
-        Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback, acceptable_execution_time })
+        Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback: TimerCore::<'h>(callback), acceptable_execution_time })
     }
 
     #[doc = include_str!("../docs/TimerQueue_schedule_oneshot.md")]
@@ -106,7 +107,7 @@ impl TimerQueue {
         let acceptable_execution_time = get_acceptable_execution_time(hint);
         let callback = Box::new(MutWrapper::new_once(self.0.clone(), hint, handler));
         let timer_handle = self.create_timer(due, 0, hint, &callback)?;
-        Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback, acceptable_execution_time })
+        Ok(Timer::<'h> { queue: self.0.clone(), handle: timer_handle, callback: TimerCore::<'h>(callback), acceptable_execution_time })
     }
 
     #[doc = include_str!("../docs/TimerQueue_fire_oneshot.md")]
@@ -189,7 +190,7 @@ impl<'h> Timer<'h> {
         if !self.handle.is_invalid() {
             let handle = self.handle;
             self.handle = HANDLE::default();
-            close_timer(self.queue.0, handle, self.acceptable_execution_time, &self.callback)
+            close_timer(self.queue.0, handle, self.acceptable_execution_time, &self.callback.0)
         } else {
             Ok(())
         }

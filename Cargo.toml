@@ -13,6 +13,10 @@ repository = "https://github.com/ruxo/native-timer"
 keywords = ["native", "timer", "schedule"]
 categories = ["concurrency", "os::windows-apis", "os::unix-apis"]
 
+[features]
+default = ["tracker"]
+tracker = []
+
 [dependencies]
 sync-wait-object = "0.1"
 parking_lot = "0.12"

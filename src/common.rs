@@ -23,6 +23,10 @@ pub(crate) struct MutWrapper<'h> {
     f: FType<'h>
 }
 
+pub(crate) trait MutCallable {
+    fn call(&mut self) -> Result<()>;
+}
+
 // --------------------------------------- IMPLEMENTATIONS --------------------------------------------
 impl<'h> MutWrapper<'h> {
     pub fn new<F>(main_queue: sync::Arc<TimerQueueCore>, hint: Option<CallbackHint>, handler: F) -> Self where F: FnMut() + Send + 'h {
@@ -45,7 +49,22 @@ impl<'h> MutWrapper<'h> {
     pub fn timer_queue(&self) -> TimerQueue {
         TimerQueue::new_with_context(self.main_queue.clone())
     }
-    pub fn call(&mut self) -> Result<()> {
+    pub(crate) fn mark_delete(&self, acceptable_execution_time: time::Duration) -> RwLockWriteGuard<'_, RawRwLock, bool> {
+        match self.mark_deleted.try_write_for(acceptable_execution_time) {
+            None => {
+                println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
+                process::abort();
+            },
+            Some(mut is_deleted) => {
+                *is_deleted = true;
+                is_deleted
+            }
+        }
+    }
+}
+
+impl<'h> MutCallable for MutWrapper<'h> {
+    fn call(&mut self) -> Result<()> {
         let is_deleted = self.mark_deleted.read();
         if !*is_deleted {
             match &mut self.f {
@@ -63,17 +82,5 @@ impl<'h> MutWrapper<'h> {
             println!("WARNING: Call back to a deleted instance {r}");
         }
         Ok(())
-    }
-    pub(crate) fn mark_delete(&self, acceptable_execution_time: time::Duration) -> RwLockWriteGuard<'_, RawRwLock, bool> {
-        match self.mark_deleted.try_write_for(acceptable_execution_time) {
-            None => {
-                println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
-                process::abort();
-            },
-            Some(mut is_deleted) => {
-                *is_deleted = true;
-                is_deleted
-            }
-        }
     }
 }
