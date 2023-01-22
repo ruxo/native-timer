@@ -87,7 +87,7 @@ pub fn schedule_oneshot<'h, F>(due: Duration, hint: Option<CallbackHint>, handle
 /// assert!(flag.load(Ordering::SeqCst));
 /// ```
 #[inline]
-pub fn fire_oneshot<F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<()> where F: FnMut() + Send + 'static {
+pub fn fire_oneshot<F>(due: Duration, hint: Option<CallbackHint>, handler: F) -> Result<()> where F: FnOnce() + Send + 'static {
     TimerQueue::default().fire_oneshot(due, hint, handler)
 }
 

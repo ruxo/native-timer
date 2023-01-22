@@ -1,7 +1,8 @@
-### 0.5.1
+### 0.5.2
 - Fix lock issue during Timer's `close` call
 - Add `Timer::close` method
 - Introduce "tracker" feature to minimize callbacks after timer destroyed
+- Fix `FnMut` return type of `fire_oneshot` to `FnOnce`
 
 ### 0.5.0
 - Use `FnOnce` with `fire_oneshot`, fix an example.
