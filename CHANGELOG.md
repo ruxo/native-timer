@@ -1,3 +1,7 @@
+### 0.5.1
+- Fix lock issue during Timer's `close` call
+- Add `Timer::close` method
+
 ### 0.5.0
 - Use `FnOnce` with `fire_oneshot`, fix an example.
 - Add `TimerQueue::schedule_oneshot`

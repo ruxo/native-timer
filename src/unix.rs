@@ -54,20 +54,30 @@ fn to_result(ret: c_int) -> Result<()> {
     else { Err(get_errno()) }
 }
 
-fn close_timer(handle: timer_t, callback: &MutWrapper){
+fn close_timer(handle: timer_t, callback: &MutWrapper) -> Result<()> {
     let acceptable_execution_time = match callback.hint {
         Some(CallbackHint::SlowFunction(d)) => d,
         _ => crate::DEFAULT_ACCEPTABLE_EXECUTION_TIME
     };
-    callback.mark_delete(acceptable_execution_time);
-    unsafe {
-        // TODO sometimes the callback still happens after the deletion! Need to find better way to clean up.
-        if timer_delete(handle) < 0 {
-            let e = get_errno();
-            println!("WARNING: an error occurred during timer destruction. Memory might leak. Error = {e:?}");
-        }
-    }
+    let _lock = callback.mark_delete(acceptable_execution_time);
 
+    change_period(handle, Duration::ZERO, Duration::ZERO)?;
+    unsafe { to_result(timer_delete(handle)) }
+}
+
+fn change_period(handle: timer_t, due: Duration, period: Duration) -> Result<()> {
+    let interval = itimerspec {
+        it_value: to_timespec(due),
+        it_interval: to_timespec(period)
+    };
+    unsafe { to_result(timer_settime(handle, 0, &interval, ptr::null_mut())) }
+}
+
+fn to_timespec(value: Duration) -> timespec {
+    let ns = value.as_nanos();
+    let secs = ns / 1_000_000_000;
+    let pure_ns = ns - (secs * 1_000_000_000);
+    timespec { tv_sec: secs as c_long, tv_nsec: pure_ns as c_long }
 }
 
 // ----------------------------------------- IMPLEMENTATIONS --------------------------------------------------
@@ -146,7 +156,7 @@ impl TimerQueue {
             // TODO use a common thread to clean up?
             thread::spawn(move || {
                 let callback = unsafe { Box::from_raw(callback_ptr as *mut MutWrapper) };
-                close_timer(handle as timer_t, &callback);
+                close_timer(handle as timer_t, &callback).unwrap();
             });
         };
 
@@ -234,17 +244,19 @@ impl TimerQueue {
     }
 }
 
-fn to_timespec(value: Duration) -> timespec {
-    let ns = value.as_nanos();
-    let secs = ns / 1_000_000_000;
-    let pure_ns = ns - (secs * 1_000_000_000);
-    timespec { tv_sec: secs as c_long, tv_nsec: pure_ns as c_long }
-}
+impl<'h> Timer<'h> {
+    /// Reset the timer with a new due time and a new period.
+    pub fn change_period(&self, due: Duration, period: Duration) -> Result<()> {
+        if let Some(handle) = self.handle { change_period(handle, due, period) }
+        else { Ok(()) }
+    }
 
-impl<'h> Drop for Timer<'h> {
-    fn drop(&mut self) {
+    /// Manually close the timer. It is safe to call this method more than once, but it is not thread-safe.
+    pub fn close(&mut self) -> Result<()> {
         if let Some(handle) = self.handle.take() {
-            close_timer(handle, &self.callback);
+            close_timer(handle, &self.callback)
+        } else {
+            Ok(())
         }
     }
 }

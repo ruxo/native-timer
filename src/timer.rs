@@ -30,8 +30,6 @@ pub type Result<T> = std::result::Result<T, TimerError>;
 pub const DEFAULT_ACCEPTABLE_EXECUTION_TIME: Duration = Duration::from_secs(1);
 
 //----------------------------- FUNCTIONS --------------------------------------
-
-
 /// Schedule an interval task on the default [`TimerQueue`].
 ///
 /// The function `interval` cannot be negative (it will be converted to `u32`). [`CallbackHint`] gives the OS scheduler some hint about the callback
@@ -94,6 +92,14 @@ pub fn fire_oneshot<F>(due: Duration, hint: Option<CallbackHint>, handler: F) ->
 }
 
 // ----------------------------------------- IMPLEMENTATIONS ------------------------------------------
+impl<'h> Drop for Timer<'h> {
+    fn drop(&mut self) {
+        if let Err(e) = self.close() {
+            println!("WARNING: an error occurred during timer destruction. Memory might leak. Error = {e:?}");
+        }
+    }
+}
+
 impl Display for TimerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {

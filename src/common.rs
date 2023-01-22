@@ -1,5 +1,6 @@
 use std::{ time, process, sync };
-use parking_lot::RwLock;
+use parking_lot::lock_api::RwLockWriteGuard;
+use parking_lot::{RawRwLock, RwLock};
 use crate::{
     Result, platform, CallbackHint
 };
@@ -57,9 +58,13 @@ impl<'h> MutWrapper<'h> {
                 FType::None => ()
             }
         }
+        else {
+            let r = self as *const MutWrapper as usize;
+            println!("WARNING: Call back to a deleted instance {r}");
+        }
         Ok(())
     }
-    pub(crate) fn mark_delete(&self, acceptable_execution_time: time::Duration) {
+    pub(crate) fn mark_delete(&self, acceptable_execution_time: time::Duration) -> RwLockWriteGuard<'_, RawRwLock, bool> {
         match self.mark_deleted.try_write_for(acceptable_execution_time) {
             None => {
                 println!("ERROR: Wait for execution timed out! Timer handler is being executed while timer is also being destroyed! Program aborts!");
@@ -67,6 +72,7 @@ impl<'h> MutWrapper<'h> {
             },
             Some(mut is_deleted) => {
                 *is_deleted = true;
+                is_deleted
             }
         }
     }

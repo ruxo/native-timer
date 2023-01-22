@@ -46,20 +46,21 @@ fn change_period(queue: HANDLE, timer: HANDLE, due: Duration, period: Duration) 
     to_result(unsafe { ChangeTimerQueueTimer(queue, timer, due.as_millis() as u32, period.as_millis() as u32).as_bool() })
 }
 
-fn close_timer(queue: HANDLE, handle: HANDLE, acceptable_execution_time: Duration, callback: &MutWrapper) {
-    callback.mark_delete(acceptable_execution_time);
+fn close_timer(queue: HANDLE, handle: HANDLE, acceptable_execution_time: Duration, callback: &MutWrapper) -> Result<()> {
+    let _lock = callback.mark_delete(acceptable_execution_time);
 
     // ensure no callback during destruction
-    change_period(queue, handle, Duration::default(), Duration::default()).unwrap();
+    change_period(queue, handle, Duration::default(), Duration::default())?;
 
     let result = unsafe { DeleteTimerQueueTimer(queue, handle, None).as_bool() };
 
     if !result {
         let e = get_win32_last_error();
         if e != ERROR_IO_PENDING {
-            println!("WARNING: Delete timer failed with error {e:?}. No retry attempt. Memory might leak!");
+            return Err(e.into());
         }
     }
+    Ok(())
 }
 
 static DEFAULT_QUEUE_INIT: sync::Once = sync::Once::new();
@@ -124,7 +125,7 @@ impl TimerQueue {
             // TODO use a common thread?
             std::thread::spawn(move || {
                 let callback = unsafe { Box::from_raw(callback_ptr as *mut MutWrapper) };
-                close_timer(queue_handle, handle, acceptable_execution_time, &callback);
+                close_timer(queue_handle, handle, acceptable_execution_time, &callback).unwrap();
             });
         };
         let callback = Box::new(MutWrapper::new_once(self.0.clone(), hint, wrapper));
@@ -178,17 +179,19 @@ impl Drop for TimerQueueCore {
 }
 
 impl<'h> Timer<'h> {
-    /// *(Windows only)* Reset the timer with a new due time and a new period.
+    /// Reset the timer with a new due time and a new period.
     pub fn change_period(&self, due: Duration, period: Duration) -> Result<()> {
         change_period(self.queue.0, self.handle, due, period)
     }
-}
 
-impl<'h> Drop for Timer<'h> {
-    fn drop(&mut self) {
+    /// Manually close the timer. It is safe to call this method more than once, but it is not thread-safe.
+    pub fn close(&mut self) -> Result<()> {
         if !self.handle.is_invalid() {
-            close_timer(self.queue.0, self.handle, self.acceptable_execution_time, &self.callback);
+            let handle = self.handle;
             self.handle = HANDLE::default();
+            close_timer(self.queue.0, handle, self.acceptable_execution_time, &self.callback)
+        } else {
+            Ok(())
         }
     }
 }
