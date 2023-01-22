@@ -5,6 +5,11 @@ Windows, Linux, and MacOS.
 
 Currently, only both Windows and Linux platforms are supported.
 
+## Features
+
+* `tracker` (default) - Enable static callback tracker. It should minimize the native callback into an invalid timer
+  context, that has been recently destroyed.
+
 ## Examples
 
 To fire an one-shot task:
